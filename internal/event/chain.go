@@ -32,7 +32,7 @@ func Open(path string, keys *kcrypto.KeyPair) (*Chain, error) {
 		return nil, err
 	}
 	c := &Chain{path: path, keys: keys, prevHash: genesisPrev}
-	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600) // path cleaned by safepath.Clean
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600) // #nosec G304 -- path cleaned by safepath.Clean
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (c *Chain) Append(ev *Event) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(c.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // c.path cleaned at Open
+	f, err := os.OpenFile(c.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- cleaned at Open
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func VerifyFile(path string, pub ed25519.PublicKey) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(path) // path cleaned by safepath.Clean
+	f, err := os.Open(path) // #nosec G304 -- path cleaned by safepath.Clean
 	if err != nil {
 		return err
 	}

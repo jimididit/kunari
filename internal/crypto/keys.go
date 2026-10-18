@@ -60,7 +60,7 @@ func LoadOrCreate(path string) (*KeyPair, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path) // path cleaned by safepath.Clean
+	data, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
 	if err == nil {
 		return ParsePrivateHex(string(trimSpace(data)))
 	}

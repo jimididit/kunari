@@ -19,7 +19,7 @@ func LintFile(path string) (*LintResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(path) // path cleaned by safepath.Clean
+	b, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
 	if err != nil {
 		return nil, err
 	}

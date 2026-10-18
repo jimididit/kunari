@@ -103,7 +103,11 @@ func watchRDCOne(ctx context.Context, t Target, out chan<- Touch) error {
 			return nil
 		}
 		var bytesReturned uint32
-		err := windows.ReadDirectoryChanges(h, &buf[0], uint32(len(buf)), false, mask, &bytesReturned, nil, 0)
+		bufLen := len(buf)
+		if bufLen == 0 || bufLen > int(^uint32(0)) {
+			return fmt.Errorf("invalid notify buffer size %d", bufLen)
+		}
+		err := windows.ReadDirectoryChanges(h, &buf[0], uint32(bufLen), false, mask, &bytesReturned, nil, 0) //nosec G602
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

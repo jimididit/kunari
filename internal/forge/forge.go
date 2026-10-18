@@ -84,11 +84,12 @@ func Run(opt Options) (*Result, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(opt.OutDir, 0o755); err != nil {
+	if err := os.MkdirAll(opt.OutDir, 0o750); err != nil {
 		return nil, err
 	}
 	artPath := filepath.Join(opt.OutDir, art.Filename)
-	if err := os.WriteFile(artPath, art.Content, 0o644); err != nil {
+	// Owner-readable decoy; operators may chmod for multi-user lab hosts.
+	if err := os.WriteFile(artPath, art.Content, 0o600); err != nil {
 		return nil, err
 	}
 
@@ -120,13 +121,13 @@ func Run(opt Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(manPath, mb, 0o644); err != nil {
+	if err := os.WriteFile(manPath, mb, 0o600); err != nil {
 		return nil, err
 	}
 
 	install := renderInstall(m, art.Filename)
 	instPath := filepath.Join(opt.OutDir, sanitizeName(opt.Name)+".INSTALL.md")
-	if err := os.WriteFile(instPath, []byte(install), 0o644); err != nil {
+	if err := os.WriteFile(instPath, []byte(install), 0o600); err != nil {
 		return nil, err
 	}
 
@@ -187,7 +188,6 @@ func renderInstall(m *registry.Manifest, filename string) string {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
-
 
 func defaultStr(s, d string) string {
 	if s == "" {
