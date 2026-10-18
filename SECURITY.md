@@ -12,10 +12,18 @@
 
 **Do not open a public GitHub issue for security problems**, and do not include working exploit details against Kunari itself in public discussions.
 
-Prefer one of these channels:
+### Preferred channel
 
-1. [GitHub Private Vulnerability Reporting](https://github.com/jimididit/kunari/security/advisories/new) (recommended)
-2. Contact the repository maintainer privately via their GitHub profile
+Enable and use GitHub Private Vulnerability Reporting (free on public repos):
+
+1. Repo **Settings** → sidebar **Security and quality** (or **Code security**) → **Advanced Security**
+2. Enable **Private vulnerability reporting**
+3. Researchers use **Security** → **Advisories** → **Report a vulnerability**, or:  
+   https://github.com/jimididit/kunari/security/advisories/new
+
+### Always available
+
+Contact the repository maintainer privately via their [GitHub profile](https://github.com/jimididit).
 
 Please include:
 
@@ -24,7 +32,7 @@ Please include:
 - Impact summary and reproduction steps sufficient to verify
 - Whether you plan a public write-up (coordinate timing if so)
 
-You should receive an acknowledgment when the report is seen. Fixes are prioritized by severity and exploitability.
+Fixes are prioritized by severity and exploitability.
 
 ## Operational notes
 
