@@ -127,31 +127,20 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
-## Deploy models
+## How detection works
 
-Pick the model that matches the host and authorization - they are not equivalent.
+Kunari has two layers. You can use either or both on an authorized host.
 
-| Model | On the endpoint | What you detect |
-|---|---|---|
-| **Beacon-max** (no agent) | Forged decoy file(s) only - hub + forge stay on your side | HTTPS/DNS beacon hits when something *uses* the decoy in a way that fetches your collector. Misses silent copy/preview/tools that never load remote content. |
-| **Agent** (sentinel) | Run `kunari sentinel` (or a future per-OS service package) plus decoys | Best available OS file-watch tier (open/read/modify where the tier allows), plus beacons if you forged `--detect both`. |
+1. **Beacon** - A forged decoy that contacts your hub over HTTPS or DNS when something uses it in a way that triggers the embedded beacon. The decoy file can sit alone on the endpoint; forge and hub stay on your infrastructure. This does not see every filesystem touch - only those network fetches.
+2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). Forge with `--detect both` if you want beacon and sentinel together.
 
-Use **beacon-max** when you cannot install software (e.g. place a bait file on an authorized client Mac). Use **agent** when you need filesystem touch visibility. A packaged one-step agent+decoy installer per OS is on the roadmap; until then, forge + `sentinel init-config` / `install-hints` is the agent path.
+Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub (not `127.0.0.1`). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 
-Hub for real beacon-max deploys must be reachable with proper TLS (not `127.0.0.1`). Never put `ingest.secret`, `api.token`, or signing keys inside forged artifacts.
-
-## Guardrails
-
-- Beacons are **DNS or HTTPS only**
-- Collection levels: `minimal` \| `standard` (default) \| `forensic` (network fields opt-in)
-- Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
-- SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible (the embedded `/ui/` console uses Bearer via `fetch` streaming, not query tokens)
-- Sentinel is **not stealth**: keep `sentinel.json` / secrets private (`0600`/`0700`); prefer `--detect both` so beacons still fire if the watcher is killed. See [SECURITY.md](SECURITY.md)
-- Do not claim beacon-only equals sentinel detection
+Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.0** is the current release. `main` also has a thin hub operator UI (`/ui/`) and sentinel OPSEC basics. Next product direction: beacon-max improvements + a per-platform agent package; privileged lab proofs remain on the roadmap.
+**v0.2.0** is the current release. `main` also includes the hub operator UI at `/ui/` and sentinel config permission hardening.
 
 ## Contributing
 
