@@ -41,21 +41,19 @@ Fixes are prioritized by severity and exploitability.
 - SSE `?token=` is for legacy `EventSource` clients only; tokens in query strings can appear in reverse-proxy access logs. Prefer `Authorization: Bearer` when the client can set headers. The embedded hub `/ui/` console streams SSE with Bearer via `fetch` (no query token).
 - Put the hub behind TLS (reverse proxy). Use `--trusted-proxy` only for terminators you control.
 
-## Sentinel OPSEC (local attackers)
+## Beacon vs sentinel
 
-Kunari is a **defensive tripwire**, not a stealth agent. A local attacker who can list processes and read files can usually discover that a sentinel is running and, if `sentinel.json` is readable, learn the watched paths.
+- **Beacon-only:** decoy files on the endpoint; alerts depend on a network fetch to your hub. Not a substitute for filesystem watching.
+- **Sentinel:** local `kunari sentinel` process required for open/read/modify (per OS tier). Prefer `--detect both` so beacons remain if the sentinel is stopped.
+- Do not describe beacon-only deployments as providing sentinel-equivalent coverage.
 
-**Assume:**
+## Sentinel and local attackers
 
-- Process name / argv (`kunari sentinel run --config …`) is visible
-- A world-readable config discloses targets, hub URL, and secret paths
-- Killing the sentinel process is possible for a privileged attacker
+Kunari is a defensive tripwire, not a stealth agent. A local attacker who can list processes and read files can usually discover that a sentinel is running and, if `sentinel.json` is readable, learn the watched paths.
 
-**Do:**
-
-- Keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). `kunari sentinel run` chmod`s config/secret files to `0600` when needed and refuses to start if `data_dir` is group/other-accessible.
-- Run under a dedicated low-privilege service account (`kunari sentinel install-hints` sketches this).
+- Process name and argv (`kunari sentinel run --config …`) are visible.
+- A world-readable config discloses targets, hub URL, and secret paths.
+- Keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). On start, Kunari sets config/secret files to `0600` when needed and refuses to run if `data_dir` is group/other-accessible.
+- Prefer a dedicated low-privilege service account (`kunari sentinel install-hints`).
 - Prefer forge `--detect both` so HTTPS/DNS beacons still fire if the sentinel is stopped.
-- Place decoys among believable paths; do not put the only copy of real secrets in a canary.
-
-**Do not expect:** invisibility from a determined local admin. Further anti-enumeration research is tracked on the internal roadmap; it will stay within authorized defensive OPSEC (not rootkit / offensive hiding techniques).
+- Do not expect invisibility from a determined local admin.

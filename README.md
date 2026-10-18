@@ -127,17 +127,20 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
-## Guardrails
+## How detection works
 
-- Beacons are **DNS or HTTPS only**
-- Collection levels: `minimal` \| `standard` (default) \| `forensic` (network fields opt-in)
-- Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
-- SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible (the embedded `/ui/` console uses Bearer via `fetch` streaming, not query tokens)
-- Sentinel is **not stealth**: keep `sentinel.json` / secrets private (`0600`/`0700`); prefer `--detect both` so beacons still fire if the watcher is killed. See [SECURITY.md](SECURITY.md)
+Kunari has two layers. You can use either or both on an authorized host.
+
+1. **Beacon** - A forged decoy that contacts your hub over HTTPS or DNS when something uses it in a way that triggers the embedded beacon. The decoy file can sit alone on the endpoint; forge and hub stay on your infrastructure. This does not see every filesystem touch - only those network fetches.
+2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). Forge with `--detect both` if you want beacon and sentinel together.
+
+Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub (not `127.0.0.1`). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
+
+Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.0** is the current release. `main` also has a thin hub operator UI (`/ui/`) over the auth API (live events, status, token revoke). Privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) remain on the roadmap.
+**v0.2.0** is the current release. `main` also includes the hub operator UI at `/ui/` and sentinel config permission hardening.
 
 ## Contributing
 
