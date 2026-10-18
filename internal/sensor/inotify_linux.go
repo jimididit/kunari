@@ -74,7 +74,8 @@ func (w *inotifyWatcher) Run(ctx context.Context, out chan<- Touch) error {
 		}
 		offset := 0
 		for offset+unix.SizeofInotifyEvent <= n {
-			ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+			// Kernel inotify wire format; bounds checked above.
+			ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset])) // #nosec G103
 			t, ok := w.wdPath[int(ev.Wd)]
 			path := ""
 			if ok {

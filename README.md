@@ -36,7 +36,7 @@ go build -o bin/kunari ./cmd/kunari
 ./bin/kunari --help
 ```
 
-Requires Go 1.24+.
+Requires Go 1.26.9+ (patched stdlib; see `go.mod` toolchain).
 
 ```bash
 # Forge a decoy (example)
