@@ -65,4 +65,4 @@ Use feature branches and pull requests against `main`. Keep secrets and local re
 
 ## Security
 
-CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. See [AUDIT_REPORT.md](AUDIT_REPORT.md) for the v0.1 self-audit and residual risk. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.
+CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.
