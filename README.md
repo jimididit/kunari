@@ -43,7 +43,7 @@ go install github.com/jimididit/kunari/cmd/kunari@latest
 kunari self-test
 ```
 
-Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.2.0`.
+Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.3.0`.
 
 **From a clone** (local `bin/` keeps the binary out of the repo root; that directory is gitignored):
 
@@ -140,7 +140,7 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.0** is the current release. `main` also includes the hub operator UI at `/ui/` and sentinel config permission hardening.
+**v0.3.0** is the current release: hub operator UI (`/ui/`), authenticated status/tokens APIs, and sentinel OPSEC basics (private config modes, quieter logs, deploy guidance).
 
 ## Contributing
 
