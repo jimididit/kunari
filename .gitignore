@@ -1,0 +1,47 @@
+# Cursor / local tooling
+.cursor/
+.specstory/
+.cursorindexingignore
+
+# Prior-art scratch clones (never ship)
+.scratch/
+
+# Internal planning / research (private until curated for public docs)
+docs/
+PLAN.md
+QUESTIONS.md
+TASKS.md
+AUDIT_REPORT.md
+ROADMAP.md
+CHANGELOG.internal.md
+
+# Build / test artifacts
+/dist/
+/bin/
+/out/
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go
+vendor/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/data/
+/var/
+kunari.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
