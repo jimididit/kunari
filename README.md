@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/jimididit/kunari/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/ci.yml)
 [![Security](https://github.com/jimididit/kunari/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/security.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/jimididit/kunari/releases/tag/v0.1.0)
-[![Go](https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jimididit/kunari)](https://github.com/jimididit/kunari/releases)
+[![Go](https://img.shields.io/github/go-mod/go-version/jimididit/kunari)](go.mod)
+[![License](https://img.shields.io/github/license/jimididit/kunari)](LICENSE)
 
 Cross-platform **canary / tripwire toolkit** for DFIR and defensive monitoring.
 

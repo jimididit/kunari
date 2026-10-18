@@ -12,16 +12,14 @@
 
 **Do not open a public GitHub issue for security problems**, and do not include working exploit details against Kunari itself in public discussions.
 
-### Preferred channel (after the repo is public)
+### Preferred channel
 
-On a **public** repository, enable and use GitHub Private Vulnerability Reporting:
+Enable and use GitHub Private Vulnerability Reporting (free on public repos):
 
-1. Repo **Settings** → sidebar **Security and quality** → **Advanced Security**
+1. Repo **Settings** → sidebar **Security and quality** (or **Code security**) → **Advanced Security**
 2. Enable **Private vulnerability reporting**
 3. Researchers use **Security** → **Advisories** → **Report a vulnerability**, or:  
    https://github.com/jimididit/kunari/security/advisories/new
-
-That settings page is often missing or limited while the repository is still **private** on a free plan. Private Vulnerability Reporting is a free feature for public repos; it is not the same as paid Code Security / Advanced Security for private repos.
 
 ### Always available
 
