@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 1 (core + beacons) is under active development. Host sensors (sentinel) land in later phases. Detection tiers are reported honestly — Kunari will not claim capabilities it has not armed.
+Phase 1 (core + beacons) is in review. Host sensors (`sentinel`) land in Phase 2+. Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
 
 ## Components
 
@@ -22,8 +22,8 @@ Phase 1 (core + beacons) is under active development. Host sensors (sentinel) la
 
 ## Guardrails
 
-- Beacons are **DNS or HTTPS only** — no UNC/SMB/WebDAV paths that can leak NTLM credentials.
-- Artifacts carry an opaque token ID and collector host — **never** sink secrets (webhooks, API keys).
+- Beacons are **DNS or HTTPS only** - no UNC/SMB/WebDAV paths that can leak NTLM credentials.
+- Artifacts carry an opaque token ID and collector host - **never** sink secrets (webhooks, API keys).
 - Collection levels: `minimal` \| `standard` (default) \| `forensic`. Forensic network fields are opt-in.
 - Alert sinks use a disk-backed queue with retries; sink failure is **surfaced**, never silently disabled.
 
