@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -168,7 +167,10 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	b.WriteString("\n## Sentinel\n\n")
 	if m.Detect == "sentinel" || m.Detect == "both" {
 		b.WriteString("```bash\n")
-		b.WriteString("kunari sentinel init-config --path /path/to/" + filename + " --token " + m.TokenID + " --memo " + shellQuote(m.Memo) + " --out sentinel.json\n")
+		b.WriteString("kunari sentinel init-config --path " + shellQuote("/path/to/"+filename) +
+			" --token " + shellQuote(m.TokenID) +
+			" --memo " + shellQuote(m.Memo) +
+			" --out sentinel.json\n")
 		b.WriteString("kunari sentinel install-hints --config sentinel.json\n")
 		b.WriteString("kunari sentinel run --config sentinel.json\n")
 		b.WriteString("```\n")
@@ -176,15 +178,14 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	} else {
 		b.WriteString("`--detect beacon` only: no host sensor required.\n")
 	}
-	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + m.TokenID + "`\n")
+	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) + "`\n")
 	return b.String()
 }
 
+// shellQuote returns a POSIX single-quoted string safe against $, `, !, and spaces.
+// strconv.Quote (Go double quotes) is NOT used: bash still expands $(...) inside "...".
 func shellQuote(s string) string {
-	if s == "" {
-		return `""`
-	}
-	return strconv.Quote(s)
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 

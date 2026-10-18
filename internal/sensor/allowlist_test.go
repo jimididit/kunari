@@ -25,4 +25,13 @@ func TestMatchAllowlist(t *testing.T) {
 	if ok {
 		t.Fatal("cat should not match")
 	}
+	// Basename alone must not silence alerts (renamed attacker binary).
+	ok, _ = sensor.MatchAllowlist(`C:\Users\evil\SearchIndexer.exe`, list)
+	if ok {
+		t.Fatal("renamed attacker binary must not match default allowlist")
+	}
+	ok, _ = sensor.MatchAllowlist(`/home/evil/updatedb`, list)
+	if ok {
+		t.Fatal("updatedb outside /usr must not match")
+	}
 }

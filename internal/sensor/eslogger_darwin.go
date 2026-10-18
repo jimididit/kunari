@@ -23,7 +23,11 @@ func newESLogger(targets []Target) (*esloggerWatcher, error) {
 	if _, err := exec.LookPath("eslogger"); err != nil {
 		return nil, fmt.Errorf("eslogger not found: %w", err)
 	}
-	// Fail open so OpenBest can fall back to FSEvents when unprivileged.
+	// --list-events succeeds without privileges; live capture does not.
+	// Require root so OpenBest falls back to mac-fsevents for unprivileged runs.
+	if os.Geteuid() != 0 {
+		return nil, fmt.Errorf("eslogger requires root (geteuid=%d)", os.Geteuid())
+	}
 	probe := exec.Command("eslogger", "--list-events")
 	if outb, err := probe.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("eslogger probe: %w (%s)", err, truncate(string(outb), 160))

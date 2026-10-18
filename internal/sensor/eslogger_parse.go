@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"encoding/json"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,11 +34,19 @@ func ParseESLoggerLine(line []byte, targets []Target) (Touch, bool) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return Touch{}, false
 	}
-	action, path := extractESEvent(raw.Event)
-	if path == "" || action == "" {
+	action, paths := extractESEvent(raw.Event)
+	if action == "" || len(paths) == 0 {
 		return Touch{}, false
 	}
-	if !pathWatched(path, targets) {
+	// Prefer a watched path so rename-away from a canary still alerts.
+	path := ""
+	for _, p := range paths {
+		if pathWatched(p, targets) {
+			path = p
+			break
+		}
+	}
+	if path == "" {
 		return Touch{}, false
 	}
 	pid := raw.Process.AuditToken.PID
@@ -62,29 +71,93 @@ func ParseESLoggerLine(line []byte, targets []Target) (Touch, bool) {
 	}, true
 }
 
-func extractESEvent(ev map[string]any) (action, path string) {
+func extractESEvent(ev map[string]any) (action string, paths []string) {
 	if ev == nil {
-		return "", ""
+		return "", nil
 	}
-	type pathSpec struct {
-		action string
-		keys   []string // nested keys under event.<name>
+	if open := mapField(ev, "open"); open != nil {
+		return "open", collectFilePaths(open, "file")
 	}
-	specs := []pathSpec{
-		{"open", []string{"open", "file", "path"}},
-		{"modify", []string{"write", "target", "path"}},
-		{"modify", []string{"create", "destination", "path"}},
-		{"delete", []string{"unlink", "target", "path"}},
-		{"rename", []string{"rename", "destination", "path"}},
-		{"rename", []string{"rename", "source", "path"}},
-		{"exec", []string{"exec", "target", "executable", "path"}},
+	if write := mapField(ev, "write"); write != nil {
+		return "modify", collectFilePaths(write, "target")
 	}
-	for _, s := range specs {
-		if p, ok := digString(ev, s.keys...); ok && p != "" {
-			return s.action, p
+	if create := mapField(ev, "create"); create != nil {
+		return "modify", destinationPaths(create["destination"])
+	}
+	if unlink := mapField(ev, "unlink"); unlink != nil {
+		return "delete", collectFilePaths(unlink, "target")
+	}
+	if rename := mapField(ev, "rename"); rename != nil {
+		var out []string
+		out = append(out, collectFilePaths(rename, "source")...)
+		out = append(out, destinationPaths(rename["destination"])...)
+		return "rename", uniqPaths(out)
+	}
+	if execEv := mapField(ev, "exec"); execEv != nil {
+		if p, ok := digString(execEv, "target", "executable", "path"); ok {
+			return "exec", []string{p}
 		}
 	}
-	return "", ""
+	return "", nil
+}
+
+func mapField(m map[string]any, key string) map[string]any {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	obj, _ := v.(map[string]any)
+	return obj
+}
+
+func collectFilePaths(m map[string]any, key string) []string {
+	if m == nil {
+		return nil
+	}
+	if p, ok := digString(m, key, "path"); ok && p != "" {
+		return []string{p}
+	}
+	// Some emitters nest as key: { existing_file: { path } }
+	return destinationPaths(m[key])
+}
+
+// destinationPaths reads ES destination unions:
+// existing_file.path or new_path.dir.path + new_path.filename.
+// Also tolerates a bare .path for older/fixture shapes.
+func destinationPaths(dest any) []string {
+	m, ok := dest.(map[string]any)
+	if !ok || m == nil {
+		return nil
+	}
+	var out []string
+	if p, ok := digString(m, "path"); ok && p != "" {
+		out = append(out, p)
+	}
+	if p, ok := digString(m, "existing_file", "path"); ok && p != "" {
+		out = append(out, p)
+	}
+	if dir, ok := digString(m, "new_path", "dir", "path"); ok && dir != "" {
+		if name, ok := digString(m, "new_path", "filename"); ok && name != "" {
+			// ES paths are always POSIX; use path.Join so Windows hosts still parse fixtures.
+			out = append(out, path.Join(dir, name))
+		} else {
+			out = append(out, dir)
+		}
+	}
+	return uniqPaths(out)
+}
+
+func uniqPaths(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range in {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 func digString(m map[string]any, keys ...string) (string, bool) {

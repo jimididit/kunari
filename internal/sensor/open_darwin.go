@@ -26,9 +26,10 @@ func PlatformInstallHints(targets []Target) string {
 1. Grant Terminal/kunari Full Disk Access (System Settings > Privacy & Security).
 2. Run elevated: sudo kunari sentinel run --config sentinel.json
 3. eslogger must be present (ships with macOS Ventura+).
+4. OpenBest only selects this tier when running as root; otherwise it uses mac-fsevents.
 
 ## Fallback tier: mac-fsevents
-Used automatically when eslogger is unavailable or cannot start.
+Used automatically when eslogger is missing, not root, or cannot start.
 Sees modify/delete/rename only - not reads/opens, and no process attribution.
 
 ## Endpoint Security system extension
