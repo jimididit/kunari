@@ -110,6 +110,33 @@ func TestBuildAgentRejectsUnsafePrefix(t *testing.T) {
 	}
 }
 
+func TestBuildAgentRejectsLinuxHomePrefix(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        filepath.Join(dir, "pack"),
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		InstallPrefix: "/home/jdi/kunari-agent",
+	})
+	if err == nil {
+		t.Fatal("expected /home prefix rejection")
+	}
+	if !strings.Contains(err.Error(), "/home") {
+		t.Fatalf("error should mention /home: %v", err)
+	}
+	sh := linuxInstall("/home/jdi/kunari-agent", "kunari")
+	if !strings.Contains(sh, "/home/*") {
+		t.Fatal("install.sh should guard against /home prefixes at runtime")
+	}
+}
+
 func TestBuildAgentWindowsPaths(t *testing.T) {
 	dir := t.TempDir()
 	art := filepath.Join(dir, "bait.env")
@@ -144,14 +171,24 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(ps1)
-	if !strings.Contains(body, "Stop-Service KunariSentinel") {
-		t.Fatal("windows install should stop service before copy")
+	if !strings.Contains(body, "schtasks.exe /Create") {
+		t.Fatal("windows install should use schtasks (kunari.exe is not a Windows Service)")
 	}
-	if idxStop, idxCopy := strings.Index(body, "Stop-Service"), strings.Index(body, "Copy-Item -LiteralPath $BinSrc"); idxStop < 0 || idxCopy < 0 || idxStop > idxCopy {
-		t.Fatal("stop service must happen before binary copy")
+	if strings.Contains(body, "sc.exe create") || strings.Contains(body, "Start-Service KunariSentinel") {
+		t.Fatal("windows install must not register kunari.exe as an sc.exe service")
+	}
+	if idxStop, idxCopy := strings.Index(body, "schtasks.exe /End"), strings.Index(body, "Copy-Item -LiteralPath $BinSrc"); idxStop < 0 || idxCopy < 0 || idxStop > idxCopy {
+		t.Fatal("stop prior task must happen before binary copy")
 	}
 	if !strings.Contains(body, "icacls") {
 		t.Fatal("windows install should set ACLs")
+	}
+	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deploy), "scheduled task") {
+		t.Fatal("DEPLOY.md should document scheduled task install")
 	}
 }
 

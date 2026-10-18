@@ -23,6 +23,12 @@ if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret
   echo "error: etc/ingest.secret missing or still a placeholder" >&2
   exit 1
 fi
+case "$PREFIX" in
+  /home|/home/*|/root|/root/*)
+    echo "error: PREFIX=$PREFIX is under a home directory; the kunari service user cannot traverse typical 0700 homes. Use /opt/kunari-agent" >&2
+    exit 1
+    ;;
+esac
 id -u kunari >/dev/null 2>&1 || useradd --system --home "$PREFIX" --shell /usr/sbin/nologin kunari
 install -d -m 0700 -o kunari -g kunari "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" "$PREFIX/data" "$PREFIX/bin"
 install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
@@ -121,10 +127,12 @@ func darwinPlist(prefix, binName string) string {
 func windowsInstall(prefix, binName string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
+# kunari.exe is not a Windows Service binary; install uses a SYSTEM scheduled task.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
 $BinName = '%s'
+$TaskName = 'KunariSentinel'
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
   throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
@@ -135,13 +143,16 @@ if ($secText -match '^\s*#' -or [string]::IsNullOrWhiteSpace($secText)) {
   throw 'etc\ingest.secret missing or still a placeholder'
 }
 
-# Stop existing service before replacing binaries.
+# Stop prior lab installs (legacy sc.exe service and/or scheduled task) before replacing binaries.
 $svc = Get-Service -Name KunariSentinel -ErrorAction SilentlyContinue
 if ($svc) {
   Stop-Service KunariSentinel -Force -ErrorAction SilentlyContinue
   sc.exe delete KunariSentinel | Out-Null
   Start-Sleep -Seconds 1
 }
+schtasks.exe /End /TN $TaskName 2>$null | Out-Null
+Get-Process -Name 'kunari' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
 
 New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'), (Join-Path $Prefix 'etc'), (Join-Path $Prefix 'data'), (Join-Path $Prefix 'bin') | Out-Null
 Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix ('bin\' + $BinName)) -Force
@@ -158,10 +169,20 @@ icacls $IngestDst /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
 $Cfg = Join-Path $Prefix 'etc\sentinel.json'
-$BinPath = '"' + $Bin + '" sentinel run --config "' + $Cfg + '"'
-sc.exe create KunariSentinel binPath= $BinPath start= auto | Out-Null
-sc.exe description KunariSentinel "Kunari defensive tripwire sensor" | Out-Null
-Start-Service KunariSentinel
-Write-Host "installed under $Prefix; service KunariSentinel started"
+# Console app via SYSTEM ONSTART task (kunari.exe is not a Windows Service).
+$Tr = '"{0}" sentinel run --config "{1}"' -f $Bin, $Cfg
+$create = & schtasks.exe /Create /TN $TaskName /TR $Tr /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+if ($LASTEXITCODE -ne 0) {
+  throw ("schtasks create failed: {0}" -f ($create -join ' '))
+}
+$run = & schtasks.exe /Run /TN $TaskName
+if ($LASTEXITCODE -ne 0) {
+  throw ("schtasks run failed: {0}" -f ($run -join ' '))
+}
+Start-Sleep -Seconds 2
+if (-not (Get-Process -Name 'kunari' -ErrorAction SilentlyContinue)) {
+  throw 'KunariSentinel task was created but kunari.exe is not running; check Task Scheduler history'
+}
+Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, ONSTART)"
 `, p, binName)
 }

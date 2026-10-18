@@ -42,12 +42,12 @@ WantedBy=multi-user.target
 `, absCfg)
 	case "windows":
 		return opsec + fmt.Sprintf(`
-# Windows service sketch (run elevated; use sc.exe or NSSM)
-# Restrict NTFS ACL on the config and data directory to the service account only.
-# icacls config.json /inheritance:r /grant:r "NT SERVICE\KunariSentinel:(R)"
-# sc.exe create KunariSentinel binPath= "C:\path\kunari.exe sentinel run --config %s" start= auto
-# sc.exe description KunariSentinel "Kunari defensive tripwire sensor"
-# sc.exe start KunariSentinel
+# Windows persistence sketch (run elevated).
+# kunari.exe is not a Windows Service binary; prefer a SYSTEM scheduled task
+# (see kunari package agent install.ps1) or a wrapper such as NSSM/WinSW.
+# Restrict NTFS ACL on the config and data directory to SYSTEM + Administrators.
+# schtasks /Create /TN KunariSentinel /TR "C:\path\kunari.exe sentinel run --config %s" /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+# schtasks /Run /TN KunariSentinel
 `, absCfg)
 	default:
 		return opsec + "\n# service install: use launchd / Phase 3 docs on macOS\n"
