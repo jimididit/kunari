@@ -20,6 +20,7 @@ func Execute() error {
 	root.AddCommand(newForgeCmd())
 	root.AddCommand(newHubCmd())
 	root.AddCommand(newSentinelCmd())
+	root.AddCommand(newPackageCmd())
 	root.AddCommand(newVerifyCmd())
 	root.AddCommand(newLintCmd())
 	root.AddCommand(newListCmd())
