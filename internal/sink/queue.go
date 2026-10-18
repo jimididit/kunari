@@ -113,7 +113,7 @@ func (q *Queue) drain(ctx context.Context) {
 			continue
 		}
 		if err := q.deliverAll(ctx, &ev); err != nil {
-			q.log.Error("sink delivery incomplete — will retry; sink NOT disabled",
+			q.log.Error("sink delivery incomplete - will retry; sink NOT disabled",
 				"event_id", ev.EventID, "err", err)
 			continue
 		}

@@ -34,8 +34,8 @@ func buildArtifact(itemType, name, theme, httpsURL, dnsName string) (*Artifact, 
 
 func buildEnv(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 	var b strings.Builder
-	b.WriteString("# " + name + " — decoy credentials (inert)\n")
-	b.WriteString("# AUTHORIZED TRIPWIRE — not real secrets\n")
+	b.WriteString("# " + name + " - decoy credentials (inert)\n")
+	b.WriteString("# AUTHORIZED TRIPWIRE - not real secrets\n")
 	b.WriteString(themeFiller(theme, name))
 	b.WriteString(fmt.Sprintf("APP_ENV=staging\n"))
 	b.WriteString(fmt.Sprintf("DATABASE_URL=postgres://canary_user:not-a-real-password-%s@db.example.invalid:5432/app\n", randomPadding(6)))
@@ -143,11 +143,11 @@ func buildDOCX(name, theme, httpsURL string) (*Artifact, error) {
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 	files := map[string]string{
-		"[Content_Types].xml":        contentTypes,
-		"_rels/.rels":                rootRels,
-		"word/document.xml":          doc,
+		"[Content_Types].xml":          contentTypes,
+		"_rels/.rels":                  rootRels,
+		"word/document.xml":            doc,
 		"word/_rels/document.xml.rels": rels,
-		"docProps/core.xml":          core,
+		"docProps/core.xml":            core,
 	}
 	for name, content := range files {
 		w, err := zw.Create(name)
@@ -216,13 +216,13 @@ func buildXLSX(name, theme, httpsURL string) (*Artifact, error) {
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 	files := map[string]string{
-		"[Content_Types].xml": contentTypes,
-		"_rels/.rels":         rootRels,
-		"xl/workbook.xml":     workbook,
-		"xl/_rels/workbook.xml.rels": wbRels,
-		"xl/worksheets/sheet1.xml": sheet,
+		"[Content_Types].xml":                 contentTypes,
+		"_rels/.rels":                         rootRels,
+		"xl/workbook.xml":                     workbook,
+		"xl/_rels/workbook.xml.rels":          wbRels,
+		"xl/worksheets/sheet1.xml":            sheet,
 		"xl/worksheets/_rels/sheet1.xml.rels": sheetRels,
-		"docProps/core.xml": core,
+		"docProps/core.xml":                   core,
 	}
 	for n, c := range files {
 		w, err := zw.Create(n)
@@ -254,7 +254,7 @@ func buildPDF(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 	// Simple single-page PDF.
 	var body strings.Builder
 	body.WriteString("%PDF-1.4\n")
-	body.WriteString("%"+string(randomBytes(4))+"\n")
+	body.WriteString("%" + string(randomBytes(4)) + "\n")
 	objects := []string{
 		"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n",
 		"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n",

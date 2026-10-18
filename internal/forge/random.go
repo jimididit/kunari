@@ -35,11 +35,11 @@ func randomPastTime() time.Time {
 func themeFiller(theme, name string) string {
 	switch theme {
 	case "finance":
-		return fmt.Sprintf("INTERNAL DRAFT — %s\nDo not distribute.\nPrepared for Q%d budget review.\nContact: finance-ops@example.invalid\n", name, randomInt(4)+1)
+		return fmt.Sprintf("INTERNAL DRAFT - %s\nDo not distribute.\nPrepared for Q%d budget review.\nContact: finance-ops@example.invalid\n", name, randomInt(4)+1)
 	case "hr":
-		return fmt.Sprintf("CONFIDENTIAL — %s\nHR working copy.\nEmployee ID placeholder: E-%04d\n", name, randomInt(9000)+1000)
+		return fmt.Sprintf("CONFIDENTIAL - %s\nHR working copy.\nEmployee ID placeholder: E-%04d\n", name, randomInt(9000)+1000)
 	case "devops":
-		return fmt.Sprintf("# %s\n# rotation notes — non-production\n# last reviewed: %s\n", name, randomPastTime().Format("2006-01-02"))
+		return fmt.Sprintf("# %s\n# rotation notes - non-production\n# last reviewed: %s\n", name, randomPastTime().Format("2006-01-02"))
 	case "it-admin":
 		return fmt.Sprintf("IT Admin notes: %s\nJump host inventory draft.\nTicket: IT-%d\n", name, randomInt(90000)+10000)
 	default:

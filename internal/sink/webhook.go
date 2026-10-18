@@ -115,7 +115,7 @@ func isBlockedHost(host string) bool {
 		ip.IsMulticast() || ip.IsUnspecified() || h == "169.254.169.254"
 }
 
-// AllowLocalWebhook is for tests only — production NewWebhookSink blocks loopback.
+// AllowLocalWebhook is for tests only - production NewWebhookSink blocks loopback.
 func NewWebhookSinkAllowLocal(rawURL string, secret []byte) (*WebhookSink, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
