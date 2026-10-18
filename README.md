@@ -133,6 +133,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 - Collection levels: `minimal` \| `standard` (default) \| `forensic` (network fields opt-in)
 - Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
 - SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible (the embedded `/ui/` console uses Bearer via `fetch` streaming, not query tokens)
+- Sentinel is **not stealth**: keep `sentinel.json` / secrets private (`0600`/`0700`); prefer `--detect both` so beacons still fire if the watcher is killed. See [SECURITY.md](SECURITY.md)
 
 ## Status
 

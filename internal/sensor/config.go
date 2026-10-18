@@ -55,6 +55,9 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		c.Targets[i].Path = p
 	}
+	if err := HardenSensitivePaths(path, &c); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
 
@@ -96,5 +99,8 @@ func WriteExampleConfig(path string, targets []Target, hubURL, hubSecretFile str
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	return hardenPrivateFile(path)
 }

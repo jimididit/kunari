@@ -22,7 +22,10 @@ func OpenBest(targets []Target) (Watcher, error) {
 func PlatformInstallHints(targets []Target) string {
 	return `# Kunari macOS sentinel setup
 
+# OPSEC: chmod 0600 sentinel.json + secrets; chmod 0700 data_dir; dedicated user when possible.
+
 ## Preferred tier: mac-eslogger (macOS 13+)
+
 1. Grant Terminal/kunari Full Disk Access (System Settings > Privacy & Security).
 2. Run elevated: sudo kunari sentinel run --config sentinel.json
 3. eslogger must be present (ships with macOS Ventura+).
