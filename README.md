@@ -107,7 +107,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 
 ## Status
 
-v0.1 is released. Current `main` adds sentinel→hub HMAC ingest, trusted-proxy client IP, webhook `DenyPrivate`, and an authenticated events API + SSE. A thin hub UI and privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) are on the roadmap.
+**v0.2.0** is the current release: sentinel→hub HMAC ingest, trusted-proxy client IP, webhook `DenyPrivate`, and an authenticated events API + SSE. A thin hub UI and privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) are on the roadmap.
 
 ## Contributing
 
