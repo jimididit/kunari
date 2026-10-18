@@ -1,5 +1,7 @@
 # Kunari
 
+*(pronounced kun-NAR-ee)*
+
 [![CI](https://github.com/jimididit/kunari/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/ci.yml)
 [![Security](https://github.com/jimididit/kunari/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/security.yml)
 [![Release](https://img.shields.io/github/v/release/jimididit/kunari)](https://github.com/jimididit/kunari/releases)
@@ -23,9 +25,27 @@ Kunari helps you plant decoy files, watch them for unauthorized touch, collect s
 
 ## Install
 
-**Release binaries** (recommended): download the archive for your OS from [Releases](https://github.com/jimididit/kunari/releases). Checksums are published with Syft SBOMs and cosign signatures on `checksums.txt`.
+Pick one:
 
-**From source** (Go 1.26.9+):
+| Method | When to use |
+|---|---|
+| **Release archive** | Recommended for operators - no Go toolchain required |
+| **`go install`** | Fastest if you already have Go; installs into your `GOBIN`/`GOPATH/bin` |
+| **Clone + build** | Development / hacking on the tree |
+| **Docker** | Hub-only lab collector ([examples/docker](examples/docker/README.md)) |
+
+**Release binaries** (recommended): download the archive for your OS/arch from [Releases](https://github.com/jimididit/kunari/releases), extract, and put `kunari` on your `PATH`. Verify with `checksums.txt` (Syft SBOMs + cosign signature on the checksum file are attached to the same release).
+
+**With Go** (Go 1.26.9+; cross-platform):
+
+```bash
+go install github.com/jimididit/kunari/cmd/kunari@latest
+kunari self-test
+```
+
+Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.2.0`.
+
+**From a clone** (local `bin/` keeps the binary out of the repo root; that directory is gitignored):
 
 ```bash
 git clone https://github.com/jimididit/kunari.git
@@ -34,27 +54,31 @@ go build -o bin/kunari ./cmd/kunari
 ./bin/kunari self-test
 ```
 
+Package managers (Homebrew, Scoop, winget) are not published yet. Until then, release archives or `go install` are the supported paths.
+
 ## Quick start
+
+Examples below assume `kunari` is on your `PATH` (or substitute `./bin/kunari` after a local build).
 
 ```bash
 # 1) Forge a decoy (beacon + sentinel)
 mkdir -p dist data
-./bin/kunari forge --type env --name app-secrets --detect both \
+kunari forge --type env --name app-secrets --detect both \
   --collector http://127.0.0.1:8080 \
   --memo "lab only" --authz-ref "LAB-001" \
   --out ./dist --key ./data/signing.key --registry ./data/registry.db
 
 # 2) Run the hub (creates ingest.secret + api.token under ./data)
-./bin/kunari hub --listen 127.0.0.1:8080 --data ./data
+kunari hub --listen 127.0.0.1:8080 --data ./data
 
 # 3) Arm a sentinel (share the hub ingest secret; never put it in the decoy)
-./bin/kunari sentinel init-config \
+kunari sentinel init-config \
   --path ./dist/app-secrets.env \
   --token "$(jq -r .token_id ./dist/app-secrets.manifest.json)" \
   --hub-url http://127.0.0.1:8080 \
   --hub-secret-file ./data/ingest.secret \
   --out ./sentinel.json
-./bin/kunari sentinel run --config ./sentinel.json
+kunari sentinel run --config ./sentinel.json
 ```
 
 Touch the decoy (`cat ./dist/app-secrets.env`). Watch hub health and events:
