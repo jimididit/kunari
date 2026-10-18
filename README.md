@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 1 (core + beacons) is under active development. Host sensors (sentinel) land in later phases. Detection tiers are reported honestly — Kunari will not claim capabilities it has not armed.
+Phase 1 (core + beacons) is in review. Host sensors (`sentinel`) land in Phase 2+. Detection tiers are reported honestly — Kunari will not claim capabilities it has not armed.
 
 ## Components
 
