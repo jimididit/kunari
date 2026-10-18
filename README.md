@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 1 (core + beacons) is in review. Host sensors (`sentinel`) land in Phase 2+. Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
+Phase 2 adds the on-host `sentinel` sensor (Linux + Windows). macOS sentinel tiers land in Phase 3. Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
 
 ## Components
 
@@ -18,7 +18,7 @@ Phase 1 (core + beacons) is in review. Host sensors (`sentinel`) land in Phase 2
 | `kunari lint` | Scan generated artifacts for static fingerprint tells |
 | `kunari verify` | Verify hash-chained, signed local event logs |
 | `kunari hub` | Self-hosted HTTPS (+ DNS) beacon collector and alert fan-out |
-| `kunari sentinel` | On-host sensor (Phase 2+) |
+| `kunari sentinel` | On-host sensor (Linux fanotify/inotify, Windows SACL-4663/RDC) |
 
 ## Guardrails
 
@@ -44,6 +44,11 @@ kunari forge --type env --name app-secrets --detect both \
 
 # Run a local hub
 kunari hub --listen :8443 --data ./data
+
+# Watch a deployed path (prints armed tier at startup)
+kunari sentinel init-config --path ./dist/app-secrets.env --token <token_id> --out sentinel.json
+kunari sentinel install-hints --config sentinel.json
+kunari sentinel run --config sentinel.json
 ```
 
 ## Contributing

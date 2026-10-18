@@ -14,11 +14,12 @@ func Execute() error {
 	root := &cobra.Command{
 		Use:   "kunari",
 		Short: "Cross-platform canary / tripwire toolkit (defensive use only)",
-		Long:  "Kunari forges tripwire artifacts, collects beacons via hub, and (later) runs on-host sensors.\n\n" + authorizedUse,
+		Long:  "Kunari forges tripwire artifacts, collects beacons via hub, and runs on-host sensors.\n\n" + authorizedUse,
 		SilenceUsage: true,
 	}
 	root.AddCommand(newForgeCmd())
 	root.AddCommand(newHubCmd())
+	root.AddCommand(newSentinelCmd())
 	root.AddCommand(newVerifyCmd())
 	root.AddCommand(newLintCmd())
 	root.AddCommand(newListCmd())
@@ -32,7 +33,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("kunari 0.1.0-dev (phase1)")
+			fmt.Println("kunari 0.1.0-dev (phase2)")
 		},
 	}
 }

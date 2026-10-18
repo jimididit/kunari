@@ -2,6 +2,7 @@
 .cursor/
 .specstory/
 .cursorindexingignore
+graphify-out/
 
 # Prior-art scratch clones (never ship)
 .scratch/

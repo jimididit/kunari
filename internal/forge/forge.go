@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,10 +165,28 @@ func renderInstall(m *registry.Manifest, filename string) string {
 		b.WriteString(fmt.Sprintf("- beacon DNS: `%s`\n", m.BeaconDNS))
 	}
 	b.WriteString("\n## Place\n\nCopy the artifact to the intended path on an authorized host. Record the path in your case notes / memo.\n")
-	b.WriteString("\n## Sentinel (Phase 2+)\n\nWhen using `--detect sentinel|both`, configure `kunari sentinel` to watch the deployed path. Install commands for SACL/fanotify will be emitted in Phase 2.\n")
+	b.WriteString("\n## Sentinel\n\n")
+	if m.Detect == "sentinel" || m.Detect == "both" {
+		b.WriteString("```bash\n")
+		b.WriteString("kunari sentinel init-config --path /path/to/" + filename + " --token " + m.TokenID + " --memo " + shellQuote(m.Memo) + " --out sentinel.json\n")
+		b.WriteString("kunari sentinel install-hints --config sentinel.json\n")
+		b.WriteString("kunari sentinel run --config sentinel.json\n")
+		b.WriteString("```\n")
+		b.WriteString("The sensor prints the armed detection tier at startup. Prefer fanotify (Linux) or win-sacl-4663 (Windows) when privileges allow.\n")
+	} else {
+		b.WriteString("`--detect beacon` only: no host sensor required.\n")
+	}
 	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + m.TokenID + "`\n")
 	return b.String()
 }
+
+func shellQuote(s string) string {
+	if s == "" {
+		return `""`
+	}
+	return strconv.Quote(s)
+}
+
 
 func defaultStr(s, d string) string {
 	if s == "" {
