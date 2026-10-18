@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 5 completes the v0.1 engineering audit ([AUDIT_REPORT.md](AUDIT_REPORT.md)) and publishes a [ROADMAP.md](ROADMAP.md). Packaging, security CI, and honest detection-tier reporting remain in place.
+Phase 5 closes the v0.1 engineering audit (webhook SSRF hardening, hub client-IP handling). Packaging, security CI, and honest detection-tier reporting remain in place.
 
 ## Components
 

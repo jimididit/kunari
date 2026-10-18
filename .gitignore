@@ -13,7 +13,8 @@ PLAN.md
 QUESTIONS.md
 TASKS.md
 CHANGELOG.internal.md
-# AUDIT_REPORT.md and ROADMAP.md are public Phase 5 deliverables (not ignored).
+AUDIT_REPORT.md
+ROADMAP.md
 
 # Build / test artifacts
 /dist/
