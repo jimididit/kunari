@@ -98,6 +98,7 @@ More detail: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](e
 | Command | Role |
 |---|---|
 | `kunari forge` | Generate tripwire artifacts + signed manifests |
+| `kunari package agent` | Build a per-OS endpoint bundle (decoy + sentinel config + install script) |
 | `kunari lint` | Scan artifacts for static fingerprint tells |
 | `kunari verify` | Verify hash-chained, signed event logs |
 | `kunari hub` | Beacon collector, ingest, operator API |
@@ -135,6 +136,8 @@ Kunari has two layers. You can use either or both on an authorized host.
 2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). Forge with `--detect both` if you want beacon and sentinel together.
 
 Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub (not `127.0.0.1`). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
+
+To stage an authorized **agent** install (sentinel + decoy + service unit for linux/windows/darwin), use `kunari package agent` after forging; put a matching release binary in the package `bin/` directory, then run the generated install script on the endpoint.
 
 Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
