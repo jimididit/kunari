@@ -24,6 +24,7 @@ func Execute() error {
 	root.AddCommand(newLintCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newRevokeCmd())
+	root.AddCommand(newSelfTestCmd())
 	root.AddCommand(newVersionCmd())
 	return root.Execute()
 }
@@ -33,7 +34,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("kunari 0.1.0-dev (phase2)")
+			fmt.Printf("kunari %s (commit %s, built %s)\n", Version, Commit, Date)
 		},
 	}
 }

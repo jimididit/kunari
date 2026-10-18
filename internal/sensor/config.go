@@ -27,7 +27,7 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(path) // path cleaned
+	b, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 3 adds macOS sentinel tiers (`mac-eslogger` preferred, `mac-fsevents` fallback) plus cross-platform `copy_suspected` correlation (always inferred). Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
+Phase 4 adds packaging and hardening: `kunari self-test`, fuzz targets, `govulncheck` / `gosec` / `semgrep` CI, and tagged releases via GoReleaser (SBOM + cosign). Detection tiers stay honest - Kunari will not claim capabilities it has not armed.
 
 ## Components
 
@@ -19,6 +19,7 @@ Phase 3 adds macOS sentinel tiers (`mac-eslogger` preferred, `mac-fsevents` fall
 | `kunari verify` | Verify hash-chained, signed local event logs |
 | `kunari hub` | Self-hosted HTTPS (+ DNS) beacon collector and alert fan-out |
 | `kunari sentinel` | On-host sensor (Linux fanotify/inotify, Windows SACL-4663/RDC, macOS eslogger/FSEvents) |
+| `kunari self-test` | Offline forge + lint + evidence-chain smoke check |
 
 ## Guardrails
 
@@ -31,10 +32,11 @@ Phase 3 adds macOS sentinel tiers (`mac-eslogger` preferred, `mac-fsevents` fall
 
 ```bash
 go build -o bin/kunari ./cmd/kunari
+./bin/kunari self-test
 ./bin/kunari --help
 ```
 
-Requires Go 1.24+.
+Requires Go 1.26.9+ (patched stdlib; see `go.mod` toolchain).
 
 ```bash
 # Forge a decoy (example)
@@ -51,10 +53,16 @@ kunari sentinel install-hints --config sentinel.json
 kunari sentinel run --config sentinel.json
 ```
 
+Lab walkthroughs: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
+
+## Releases
+
+Push a `v*` tag to run [.github/workflows/release.yml](.github/workflows/release.yml): GoReleaser builds multi-OS archives, Syft SBOMs, and cosign keyless signatures on `checksums.txt`.
+
 ## Contributing
 
 Use feature branches and pull requests against `main`. Keep secrets and local research notes out of git (see `.gitignore`). Do not contribute exploit payloads, persistence mechanisms, or credential-stealing beacons.
 
 ## Security
 
-Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.
+CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.

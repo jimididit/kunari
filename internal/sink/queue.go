@@ -2,10 +2,11 @@ package sink
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
@@ -102,7 +103,7 @@ func (q *Queue) drain(ctx context.Context) {
 			continue
 		}
 		path := filepath.Join(q.dir, name)
-		b, err := os.ReadFile(path) // path confined to q.dir + basename
+		b, err := os.ReadFile(path) // #nosec G304 -- confined to q.dir + basename
 		if err != nil {
 			continue
 		}
@@ -141,7 +142,11 @@ func deliverWithBackoff(ctx context.Context, s Sink, ev *event.Event) error {
 		if err == nil {
 			return nil
 		}
-		d := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(rand.Intn(50))*time.Millisecond
+		jitter := 0
+		if n, err := rand.Int(rand.Reader, big.NewInt(50)); err == nil {
+			jitter = int(n.Int64())
+		}
+		d := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(jitter)*time.Millisecond
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

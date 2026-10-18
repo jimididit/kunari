@@ -74,7 +74,8 @@ func (w *fanotifyWatcher) Run(ctx context.Context, out chan<- Touch) error {
 			if offset+24 > n {
 				break
 			}
-			meta := (*unix.FanotifyEventMetadata)(unsafe.Pointer(&buf[offset]))
+			// Kernel fanotify wire format; Event_len bounds checked below.
+			meta := (*unix.FanotifyEventMetadata)(unsafe.Pointer(&buf[offset])) // #nosec G103
 			if int(meta.Event_len) == 0 || offset+int(meta.Event_len) > n {
 				break
 			}
