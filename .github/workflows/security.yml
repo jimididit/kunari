@@ -67,8 +67,36 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Short fuzz
+        # Tolerate Go's known -fuzztime shutdown race ("context deadline exceeded"
+        # with no crasher). See https://github.com/golang/go/issues/75804
         run: |
-          go test ./internal/sensor/ -run='^$' -fuzz=FuzzParseESLoggerLine -fuzztime=15s
-          go test ./internal/sensor/ -run='^$' -fuzz=FuzzMatchAllowlist -fuzztime=10s
-          go test ./internal/safepath/ -run='^$' -fuzz=FuzzClean -fuzztime=10s
-          go test ./internal/event/ -run='^$' -fuzz=FuzzCanonicalPayload -fuzztime=10s
+          set +e
+          run_fuzz() {
+            local label="$1"; shift
+            local log
+            log="$(mktemp)"
+            for attempt in 1 2 3; do
+              go test "$@" >"$log" 2>&1
+              code=$?
+              cat "$log"
+              if [ "$code" -eq 0 ]; then
+                return 0
+              fi
+              if grep -qE 'Failing input written to|fuzz: minimizing|panic:|seed corpus' "$log"; then
+                echo "::error::${label}: real fuzz finding"
+                return "$code"
+              fi
+              if grep -q 'context deadline exceeded' "$log" && grep -q 'fuzz: elapsed:' "$log"; then
+                echo "::warning::${label}: benign fuzztime deadline race (attempt ${attempt}); retrying"
+                continue
+              fi
+              echo "::error::${label}: unexpected fuzz failure"
+              return "$code"
+            done
+            echo "::error::${label}: still failing after retries"
+            return 1
+          }
+          run_fuzz ParseESLoggerLine ./internal/sensor/ -run='^$' -fuzz=FuzzParseESLoggerLine -fuzztime=15s || exit 1
+          run_fuzz MatchAllowlist ./internal/sensor/ -run='^$' -fuzz=FuzzMatchAllowlist -fuzztime=10s || exit 1
+          run_fuzz Clean ./internal/safepath/ -run='^$' -fuzz=FuzzClean -fuzztime=10s || exit 1
+          run_fuzz CanonicalPayload ./internal/event/ -run='^$' -fuzz=FuzzCanonicalPayload -fuzztime=10s || exit 1
