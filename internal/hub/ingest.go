@@ -28,7 +28,8 @@ func newSeenIDs(max int) *seenIDs {
 	return &seenIDs{ids: make(map[string]struct{}, max), max: max}
 }
 
-func (s *seenIDs) SeenOrAdd(id string) bool {
+// Reserve marks id as in-flight/seen. Returns true if it was already present.
+func (s *seenIDs) Reserve(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.ids[id]; ok {
@@ -42,6 +43,22 @@ func (s *seenIDs) SeenOrAdd(id string) bool {
 	s.ids[id] = struct{}{}
 	s.order = append(s.order, id)
 	return false
+}
+
+// Forget drops a reserved id so a failed ingest can be retried.
+func (s *seenIDs) Forget(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.ids[id]; !ok {
+		return
+	}
+	delete(s.ids, id)
+	for i, v := range s.order {
+		if v == id {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			return
+		}
+	}
 }
 
 func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -90,12 +107,13 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.seen.SeenOrAdd(ev.EventID) {
+	if h.seen.Reserve(ev.EventID) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	if err := h.recordIngest(&ev); err != nil {
+		h.seen.Forget(ev.EventID)
 		h.log.Error("record ingest", "err", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return

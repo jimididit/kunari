@@ -108,8 +108,9 @@ func validateWebhookURL(raw string) error {
 }
 
 func isBlockedHostLiteral(host string) bool {
-	h := strings.ToLower(host)
-	if h == "localhost" || h == "metadata.google.internal" || strings.HasSuffix(h, ".localhost") {
+	h := normalizeHost(host)
+	if h == "localhost" || h == "metadata.google.internal" ||
+		strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".metadata.google.internal") {
 		return true
 	}
 	ip := net.ParseIP(h)
@@ -135,6 +136,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	if err != nil {
 		return nil, err
 	}
+	host = normalizeHost(host)
 	if isBlockedHostLiteral(host) {
 		return nil, fmt.Errorf("webhook host %q blocked", host)
 	}
@@ -186,11 +188,12 @@ func newWebhook(rawURL string, secret []byte, allowPrivate bool) (*WebhookSink, 
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("webhook host required")
 	}
+	host := normalizeHost(u.Hostname())
 	if !allowPrivate {
 		if err := validateWebhookURL(rawURL); err != nil {
 			return nil, err
 		}
-	} else if isMetadataHost(u.Hostname()) {
+	} else if isMetadataHost(host) {
 		return nil, fmt.Errorf("webhook host %q blocked (metadata)", u.Hostname())
 	}
 	transport := &http.Transport{
@@ -201,7 +204,11 @@ func newWebhook(rawURL string, secret []byte, allowPrivate bool) (*WebhookSink, 
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	if !allowPrivate {
+	if allowPrivate {
+		// Lab/on-prem hubs may be loopback or RFC1918; still refuse link-local metadata
+		// even when the URL hostname is a DNS name that resolves there.
+		transport.DialContext = hubDialContext
+	} else {
 		transport.DialContext = safeDialContext
 	}
 	return &WebhookSink{
@@ -217,15 +224,66 @@ func newWebhook(rawURL string, secret []byte, allowPrivate bool) (*WebhookSink, 
 	}, nil
 }
 
+func normalizeHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	h = strings.TrimSuffix(h, ".")
+	if i := strings.IndexByte(h, '%'); i >= 0 {
+		h = h[:i]
+	}
+	return h
+}
+
 func isMetadataHost(host string) bool {
-	h := strings.ToLower(host)
-	if h == "metadata.google.internal" {
+	h := normalizeHost(host)
+	if h == "metadata.google.internal" || strings.HasSuffix(h, ".metadata.google.internal") {
 		return true
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {
 		return false
 	}
-	// AWS/GCP/Azure link-local metadata
+	// AWS/GCP/Azure link-local metadata (and scoped IPv6 after zone strip)
 	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+// hubDialContext allows loopback/RFC1918 hub destinations but refuses link-local
+// metadata, multicast, and unspecified addresses (including via DNS rebinding).
+func hubDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	host = normalizeHost(host)
+	if isMetadataHost(host) {
+		return nil, fmt.Errorf("hub host %q blocked (metadata)", host)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var last error
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	for _, ipa := range ips {
+		if isHubBlockedIP(ipa.IP) {
+			last = fmt.Errorf("hub resolved to blocked address %s", ipa.IP)
+			continue
+		}
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = fmt.Errorf("hub host %q has no usable addresses", host)
+	}
+	return nil, last
+}
+
+func isHubBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified()
 }

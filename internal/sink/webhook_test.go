@@ -72,6 +72,26 @@ func TestWebhookHMAC(t *testing.T) {
 	}
 }
 
+func TestHubPushBlocksMetadataLiterals(t *testing.T) {
+	secret := []byte("0123456789abcdef")
+	blocked := []string{
+		"http://169.254.169.254/latest",
+		"http://[fe80::1]/latest",
+		"http://[fe80::1%eth0]/latest",
+		"http://metadata.google.internal/computeMetadata/v1/",
+		"http://metadata.google.internal./computeMetadata/v1/",
+	}
+	for _, u := range blocked {
+		if _, err := sink.NewHubPushSink(u, secret); err == nil {
+			t.Fatalf("expected block for %s", u)
+		}
+	}
+	// Loopback hub for lab is allowed at construction time.
+	if _, err := sink.NewHubPushSink("http://127.0.0.1:8080/api/v1/ingest", secret); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestThrottleSuppresses(t *testing.T) {
 	th := sink.NewThrottle(time.Minute)
 	ev := event.New("tok", "beacon", "beacon-https", "beacon_fetch")
