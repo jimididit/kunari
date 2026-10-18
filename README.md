@@ -1,88 +1,122 @@
 # Kunari
 
-Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
+[![CI](https://github.com/jimididit/kunari/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/ci.yml)
+[![Security](https://github.com/jimididit/kunari/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/jimididit/kunari/actions/workflows/security.yml)
+[![Release](https://img.shields.io/github/v/release/jimididit/kunari?include_prereleases)](https://github.com/jimididit/kunari/releases)
+[![Go](https://img.shields.io/github/go-mod/go-version/jimididit/kunari)](go.mod)
+[![License](https://img.shields.io/github/license/jimididit/kunari)](LICENSE)
 
-> **Authorized use only.** Deploy Kunari only on systems you own or have written authorization to monitor. Do not use Kunari for unauthorized access, harassment, stalking, or offensive operations. Generated manifests include an authorization-reference field for operational accountability.
+Cross-platform **canary / tripwire toolkit** for DFIR and defensive monitoring.
 
-**License:** [Apache-2.0](LICENSE)
+Kunari helps you plant decoy files, watch them for unauthorized touch, collect signed evidence, and alert through a self-hosted hub - using DNS or HTTPS beacons only (no NTLM-leaking UNC/SMB paths).
 
-## Status
+> **Authorized use only.** Deploy Kunari only on systems you own or have written authorization to monitor. Do not use it for unauthorized access, harassment, stalking, or offensive operations. Generated manifests include an authorization-reference field for operational accountability.
 
-Phase 5 closes the v0.1 engineering audit (webhook SSRF hardening, hub client-IP handling). Packaging, security CI, and honest detection-tier reporting remain in place.
+## Features
 
-## Components
+- **Forge** decoy artifacts with signed manifests and install notes
+- **Sentinel** on-host sensors with honest detection tiers (Linux / Windows / macOS)
+- **Hub** HTTPS (+ optional DNS) collector with HMAC ingest from sentinels
+- **Evidence** hash-chained, Ed25519-signed event logs (`kunari verify`)
+- **Alerts** disk-backed queue - sink failures are surfaced, never silently disabled
+- **Operator API** authenticated event pull + live SSE stream
+
+## Install
+
+**Release binaries** (recommended): download the archive for your OS from [Releases](https://github.com/jimididit/kunari/releases). Checksums are published with Syft SBOMs and cosign signatures on `checksums.txt`.
+
+**From source** (Go 1.26.9+):
+
+```bash
+git clone https://github.com/jimididit/kunari.git
+cd kunari
+go build -o bin/kunari ./cmd/kunari
+./bin/kunari self-test
+```
+
+## Quick start
+
+```bash
+# 1) Forge a decoy (beacon + sentinel)
+mkdir -p dist data
+./bin/kunari forge --type env --name app-secrets --detect both \
+  --collector http://127.0.0.1:8080 \
+  --memo "lab only" --authz-ref "LAB-001" \
+  --out ./dist --key ./data/signing.key --registry ./data/registry.db
+
+# 2) Run the hub (creates ingest.secret + api.token under ./data)
+./bin/kunari hub --listen 127.0.0.1:8080 --data ./data
+
+# 3) Arm a sentinel (share the hub ingest secret; never put it in the decoy)
+./bin/kunari sentinel init-config \
+  --path ./dist/app-secrets.env \
+  --token "$(jq -r .token_id ./dist/app-secrets.manifest.json)" \
+  --hub-url http://127.0.0.1:8080 \
+  --hub-secret-file ./data/ingest.secret \
+  --out ./sentinel.json
+./bin/kunari sentinel run --config ./sentinel.json
+```
+
+Touch the decoy (`cat ./dist/app-secrets.env`). Watch hub health and events:
+
+```bash
+curl -s http://127.0.0.1:8080/healthz
+
+curl -s -H "Authorization: Bearer $(tr -d '\n' < ./data/api.token)" \
+  'http://127.0.0.1:8080/api/v1/events?after_seq=0&limit=50'
+```
+
+More detail: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
+
+## Commands
 
 | Command | Role |
 |---|---|
-| `kunari forge` | Generate tripwire artifacts + signed manifests + install/uninstall notes |
-| `kunari lint` | Scan generated artifacts for static fingerprint tells |
-| `kunari verify` | Verify hash-chained, signed local event logs |
-| `kunari hub` | Self-hosted HTTPS (+ DNS) beacon collector and alert fan-out |
-| `kunari sentinel` | On-host sensor (Linux fanotify/inotify, Windows SACL-4663/RDC, macOS eslogger/FSEvents) |
+| `kunari forge` | Generate tripwire artifacts + signed manifests |
+| `kunari lint` | Scan artifacts for static fingerprint tells |
+| `kunari verify` | Verify hash-chained, signed event logs |
+| `kunari hub` | Beacon collector, ingest, operator API |
+| `kunari sentinel` | On-host sensor (best available OS tier) |
 | `kunari self-test` | Offline forge + lint + evidence-chain smoke check |
+
+## Hub API (operator)
+
+Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Never embed them in forged artifacts.
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /healthz` | none | Liveness + hit counters |
+| `GET\|HEAD /b/{token}` | none | HTTPS beacon |
+| `POST /api/v1/ingest` | HMAC (`X-Kunari-*`) | Sentinel event push |
+| `GET /api/v1/events` | Bearer / `X-Kunari-API-Key` | Paginated pull (`after_seq`, `limit`) |
+| `GET /api/v1/events/stream` | Bearer or `?token=` | Live SSE |
+
+Behind a TLS terminator:
+
+```bash
+kunari hub --listen 127.0.0.1:8080 --data ./data \
+  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+```
 
 ## Guardrails
 
-- Beacons are **DNS or HTTPS only** - no UNC/SMB/WebDAV paths that can leak NTLM credentials.
-- Artifacts carry an opaque token ID and collector host - **never** sink secrets (webhooks, API keys).
-- Collection levels: `minimal` \| `standard` (default) \| `forensic`. Forensic network fields are opt-in.
-- Alert sinks use a disk-backed queue with retries; sink failure is **surfaced**, never silently disabled.
+- Beacons are **DNS or HTTPS only**
+- Collection levels: `minimal` \| `standard` (default) \| `forensic` (network fields opt-in)
+- Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
+- SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible
 
-## Quick start (development)
+## Status
 
-```bash
-go build -o bin/kunari ./cmd/kunari
-./bin/kunari self-test
-./bin/kunari --help
-```
-
-Requires Go 1.26.9+ (patched stdlib; see `go.mod` toolchain).
-
-```bash
-# Forge a decoy (example)
-kunari forge --type env --name app-secrets --detect both \
-  --collector https://beacon.example.com \
-  --memo "lab only" --authz-ref "LAB-001" --out ./dist
-
-# Run a local hub (creates data/ingest.secret for sentinel HMAC push)
-kunari hub --listen :8443 --data ./data
-
-# Behind Caddy/nginx: only trust the terminator for client IP
-kunari hub --listen 127.0.0.1:8080 --data ./data \
-  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
-
-# Watch a deployed path and push alerts to the hub
-kunari sentinel init-config --path ./dist/app-secrets.env --token <token_id> \
-  --hub-url http://127.0.0.1:8443 --hub-secret-file ./data/ingest.secret \
-  --out sentinel.json
-kunari sentinel install-hints --config sentinel.json
-kunari sentinel run --config sentinel.json
-```
-
-Hub accepts `POST /api/v1/ingest` (HMAC-SHA256, same headers as webhook sinks). Share `ingest.secret` with sentinels; never embed it in forged artifacts. Webhook sinks allow RFC1918 by default (on-prem SIEM); use `sink.WebhookOptions{DenyPrivate: true}` for cloud-only egress.
-
-Operator read API (Bearer from `data/api.token`):
-
-```bash
-# Pull (header auth required)
-curl -s -H "Authorization: Bearer $(tr -d '\n' < data/api.token)" \
-  'http://127.0.0.1:8443/api/v1/events?after_seq=0&limit=50'
-
-# Live SSE (EventSource may use ?token=)
-curl -N -H "Authorization: Bearer $(tr -d '\n' < data/api.token)" \
-  'http://127.0.0.1:8443/api/v1/events/stream'
-```
-
-Lab walkthroughs: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
-
-## Releases
-
-Push a `v*` tag to run [.github/workflows/release.yml](.github/workflows/release.yml): GoReleaser builds multi-OS archives, Syft SBOMs, and cosign keyless signatures on `checksums.txt`.
+v0.1 is released. Current `main` adds sentinel→hub HMAC ingest, trusted-proxy client IP, webhook `DenyPrivate`, and an authenticated events API + SSE. A thin hub UI and privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) are on the roadmap.
 
 ## Contributing
 
-Use feature branches and pull requests against `main`. Keep secrets and local research notes out of git (see `.gitignore`). Do not contribute exploit payloads, persistence mechanisms, or credential-stealing beacons.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Use feature branches and pull requests against `main`. Do not contribute exploit payloads, persistence mechanisms, or credential-stealing beacons.
 
 ## Security
 
-CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.
+See [SECURITY.md](SECURITY.md) for supported versions and how to report vulnerabilities privately.
+
+## License
+
+[Apache-2.0](LICENSE)

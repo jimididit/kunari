@@ -7,6 +7,10 @@
 3. Open a pull request against `main`. Do not push directly to `main` once the repo is shared.
 4. CI must be green on Linux, Windows, and macOS runners.
 
+## Security reports
+
+Do not file public issues for vulnerabilities. Follow [SECURITY.md](SECURITY.md).
+
 ## Authorized use
 
 Kunari is for defensive / DFIR deployment on systems you are authorized to monitor. Do not contribute:
