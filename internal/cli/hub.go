@@ -15,12 +15,13 @@ import (
 
 func newHubCmd() *cobra.Command {
 	var (
-		listen    string
-		dnsListen string
-		dnsZone   string
-		dataDir   string
-		keyPath   string
-		collectLvl string
+		listen       string
+		dnsListen    string
+		dnsZone      string
+		dataDir      string
+		keyPath      string
+		ingestSecret string
+		collectLvl   string
 	)
 	cmd := &cobra.Command{
 		Use:   "hub",
@@ -35,13 +36,14 @@ func newHubCmd() *cobra.Command {
 				return err
 			}
 			h, err := hub.New(hub.Config{
-				HTTPListen: listen,
-				DNSListen:  dnsListen,
-				DNSZone:    dnsZone,
-				DataDir:    dataDir,
-				RegistryDB: filepath.Join(dataDir, "registry.db"),
-				KeyPath:    keyPath,
-				Collect:    lvl,
+				HTTPListen:       listen,
+				DNSListen:        dnsListen,
+				DNSZone:          dnsZone,
+				DataDir:          dataDir,
+				RegistryDB:       filepath.Join(dataDir, "registry.db"),
+				KeyPath:          keyPath,
+				IngestSecretPath: ingestSecret,
+				Collect:          lvl,
 			})
 			if err != nil {
 				return err
@@ -59,10 +61,14 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dnsZone, "dns-zone", "", "DNS zone this hub is authoritative for")
 	cmd.Flags().StringVar(&dataDir, "data", "./data", "data directory")
 	cmd.Flags().StringVar(&keyPath, "key", "", "signing key path (default: <data>/signing.key)")
+	cmd.Flags().StringVar(&ingestSecret, "ingest-secret", "", "HMAC ingest secret path (default: <data>/ingest.secret)")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if keyPath == "" {
 			keyPath = filepath.Join(dataDir, "signing.key")
+		}
+		if ingestSecret == "" {
+			ingestSecret = filepath.Join(dataDir, "ingest.secret")
 		}
 		return nil
 	}

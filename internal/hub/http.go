@@ -15,13 +15,15 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":   true,
-			"hits": h.Hits(),
-			"ts":   time.Now().UTC(),
+			"ok":     true,
+			"hits":   h.Hits(),
+			"ingest": len(h.ingestSecret) > 0,
+			"ts":     time.Now().UTC(),
 		})
 	})
 	mux.HandleFunc("GET /b/{token}", h.handleBeacon)
 	mux.HandleFunc("HEAD /b/{token}", h.handleBeacon)
+	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
 	mux.HandleFunc("GET /api/v1/events", h.handleListEventsStub)
 	return mux
 }

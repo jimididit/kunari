@@ -51,17 +51,19 @@ func newSentinelRunCmd() *cobra.Command {
 
 func newSentinelInitConfigCmd() *cobra.Command {
 	var (
-		out   string
-		path  string
-		token string
-		memo  string
+		out           string
+		path          string
+		token         string
+		memo          string
+		hubURL        string
+		hubSecretFile string
 	)
 	cmd := &cobra.Command{
 		Use:   "init-config",
 		Short: "Write an example sentinel.json",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targets := []sensor.Target{{Path: path, TokenID: token, Memo: memo}}
-			if err := sensor.WriteExampleConfig(out, targets); err != nil {
+			if err := sensor.WriteExampleConfig(out, targets, hubURL, hubSecretFile); err != nil {
 				return err
 			}
 			fmt.Println("wrote", out)
@@ -72,6 +74,8 @@ func newSentinelInitConfigCmd() *cobra.Command {
 	cmd.Flags().StringVar(&path, "path", "", "path to watch")
 	cmd.Flags().StringVar(&token, "token", "", "token id from forge manifest")
 	cmd.Flags().StringVar(&memo, "memo", "", "memo")
+	cmd.Flags().StringVar(&hubURL, "hub-url", "", "optional hub base URL for HMAC event push")
+	cmd.Flags().StringVar(&hubSecretFile, "hub-secret-file", "", "path to hub ingest.secret (shared with hub)")
 	_ = cmd.MarkFlagRequired("path")
 	return cmd
 }
