@@ -127,6 +127,19 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
+## Deploy models
+
+Pick the model that matches the host and authorization - they are not equivalent.
+
+| Model | On the endpoint | What you detect |
+|---|---|---|
+| **Beacon-max** (no agent) | Forged decoy file(s) only - hub + forge stay on your side | HTTPS/DNS beacon hits when something *uses* the decoy in a way that fetches your collector. Misses silent copy/preview/tools that never load remote content. |
+| **Agent** (sentinel) | Run `kunari sentinel` (or a future per-OS service package) plus decoys | Best available OS file-watch tier (open/read/modify where the tier allows), plus beacons if you forged `--detect both`. |
+
+Use **beacon-max** when you cannot install software (e.g. place a bait file on an authorized client Mac). Use **agent** when you need filesystem touch visibility. A packaged one-step agent+decoy installer per OS is on the roadmap; until then, forge + `sentinel init-config` / `install-hints` is the agent path.
+
+Hub for real beacon-max deploys must be reachable with proper TLS (not `127.0.0.1`). Never put `ingest.secret`, `api.token`, or signing keys inside forged artifacts.
+
 ## Guardrails
 
 - Beacons are **DNS or HTTPS only**
@@ -134,10 +147,11 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 - Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
 - SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible (the embedded `/ui/` console uses Bearer via `fetch` streaming, not query tokens)
 - Sentinel is **not stealth**: keep `sentinel.json` / secrets private (`0600`/`0700`); prefer `--detect both` so beacons still fire if the watcher is killed. See [SECURITY.md](SECURITY.md)
+- Do not claim beacon-only equals sentinel detection
 
 ## Status
 
-**v0.2.0** is the current release. `main` also has a thin hub operator UI (`/ui/`) over the auth API (live events, status, token revoke). Privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) remain on the roadmap.
+**v0.2.0** is the current release. `main` also has a thin hub operator UI (`/ui/`) and sentinel OPSEC basics. Next product direction: beacon-max improvements + a per-platform agent package; privileged lab proofs remain on the roadmap.
 
 ## Contributing
 

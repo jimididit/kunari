@@ -41,6 +41,12 @@ Fixes are prioritized by severity and exploitability.
 - SSE `?token=` is for legacy `EventSource` clients only; tokens in query strings can appear in reverse-proxy access logs. Prefer `Authorization: Bearer` when the client can set headers. The embedded hub `/ui/` console streams SSE with Bearer via `fetch` (no query token).
 - Put the hub behind TLS (reverse proxy). Use `--trusted-proxy` only for terminators you control.
 
+## Deploy models (capability honesty)
+
+- **Beacon-max:** only decoy files on the endpoint. Alerts depend on a network fetch to your hub. Suitable when you cannot install an agent; not a substitute for filesystem watching.
+- **Agent (sentinel):** local Kunari process/service required for open/read/modify (per OS tier). Stronger; assumes authorized install. Prefer `--detect both` so beacons remain if the agent is stopped.
+- Do not describe beacon-only deployments as providing sentinel-equivalent coverage.
+
 ## Sentinel OPSEC (local attackers)
 
 Kunari is a **defensive tripwire**, not a stealth agent. A local attacker who can list processes and read files can usually discover that a sentinel is running and, if `sentinel.json` is readable, learn the watched paths.
