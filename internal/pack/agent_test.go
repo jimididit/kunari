@@ -74,17 +74,56 @@ func TestBuildAgentLinux(t *testing.T) {
 	}
 }
 
-func TestBuildAgentWindowsPaths(t *testing.T) {
+func TestBuildAgentRequiresIngestFile(t *testing.T) {
 	dir := t.TempDir()
 	art := filepath.Join(dir, "bait.env")
 	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
-	out := filepath.Join(dir, "winpack")
-	if err := BuildAgent(AgentOptions{
-		Target:       "windows",
-		OutDir:       out,
+	err := BuildAgent(AgentOptions{
+		Target:       "linux",
+		OutDir:       filepath.Join(dir, "pack"),
 		ArtifactPath: art,
 		TokenID:      "abcdabcdabcdabcd",
-		HubURL:       "https://hub.example.com/",
+		HubURL:       "https://hub.example.com",
+	})
+	if err == nil {
+		t.Fatal("expected error without hub-secret-file")
+	}
+}
+
+func TestBuildAgentRejectsUnsafePrefix(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        filepath.Join(dir, "pack"),
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		InstallPrefix: "/tmp/kunari; curl evil.test",
+	})
+	if err == nil {
+		t.Fatal("expected unsafe prefix rejection")
+	}
+}
+
+func TestBuildAgentWindowsPaths(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "winpack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "windows",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com/",
+		HubSecretFile: sec,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +139,25 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	if cfg.Targets[0].Path != want {
 		t.Fatalf("got %q want %q", cfg.Targets[0].Path, want)
 	}
-	if _, err := os.Stat(filepath.Join(out, "install.ps1")); err != nil {
+	ps1, err := os.ReadFile(filepath.Join(out, "install.ps1"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	body := string(ps1)
+	if !strings.Contains(body, "Stop-Service KunariSentinel") {
+		t.Fatal("windows install should stop service before copy")
+	}
+	if idxStop, idxCopy := strings.Index(body, "Stop-Service"), strings.Index(body, "Copy-Item -LiteralPath $BinSrc"); idxStop < 0 || idxCopy < 0 || idxStop > idxCopy {
+		t.Fatal("stop service must happen before binary copy")
+	}
+	if !strings.Contains(body, "icacls") {
+		t.Fatal("windows install should set ACLs")
+	}
+}
+
+func TestShQuote(t *testing.T) {
+	if got := shQuote(`o'reilly`); got != `'o'"'"'reilly'` {
+		t.Fatalf("got %q", got)
 	}
 }
 

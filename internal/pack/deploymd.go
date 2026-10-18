@@ -2,11 +2,7 @@ package pack
 
 import "fmt"
 
-func deployMarkdown(goos, prefix, binName, decoyBase string, ingestIncluded bool) string {
-	ingestNote := "Copy the hub ingest HMAC key into etc/ingest.secret in this package (file mode 0600) before install."
-	if ingestIncluded {
-		ingestNote = "This package already includes etc/ingest.secret. Protect the bundle in transit; treat it as sensitive."
-	}
+func deployMarkdown(goos, prefix, binName, decoyBase string, _ bool) string {
 	return fmt.Sprintf(`# Kunari agent package (%s)
 
 Authorized use only. Deploy only on systems you own or have written authorization to monitor.
@@ -15,11 +11,11 @@ Authorized use only. Deploy only on systems you own or have written authorizatio
 
 - decoys/%s - forged decoy (beacon may still fire if the sentinel is stopped)
 - etc/sentinel.json - sentinel config (install paths under %s)
-- etc/ingest.secret - hub HMAC key file (or placeholder)
+- etc/ingest.secret - hub HMAC key file (embedded at package time; required)
 - bin/ - place %s here before install
 - platform install script and service unit
 
-%s
+Protect this bundle in transit; it contains hub ingest material.
 
 ## Install (high level)
 
@@ -29,5 +25,5 @@ Authorized use only. Deploy only on systems you own or have written authorizatio
 4. Confirm hub reachability and touch the decoy in a lab first.
 
 This is an agent deploy (sentinel process on the endpoint). It is not beacon-only.
-`, goos, decoyBase, prefix, binName, ingestNote, prefix)
+`, goos, decoyBase, prefix, binName, prefix)
 }

@@ -19,7 +19,7 @@ type AgentOptions struct {
 	TokenID       string
 	Memo          string
 	HubURL        string
-	HubSecretFile string // optional; copied into pack as etc/ingest.secret
+	HubSecretFile string // required; copied into pack as etc/ingest.secret
 	InstallPrefix string // optional override of default install root
 	BinaryName    string // optional; default kunari / kunari.exe
 }
@@ -35,6 +35,9 @@ func BuildAgent(opts AgentOptions) error {
 	}
 	if strings.TrimSpace(opts.HubURL) == "" {
 		return fmt.Errorf("--hub-url is required")
+	}
+	if strings.TrimSpace(opts.HubSecretFile) == "" {
+		return fmt.Errorf("--hub-secret-file is required (refusing placeholder HMAC config)")
 	}
 	art, err := safepath.Clean(opts.ArtifactPath)
 	if err != nil {
@@ -55,6 +58,9 @@ func BuildAgent(opts AgentOptions) error {
 	if prefix == "" {
 		prefix = defaultPrefix(goos)
 	}
+	if err := validatePrefix(goos, prefix); err != nil {
+		return err
+	}
 	binName := opts.BinaryName
 	if binName == "" {
 		if goos == "windows" {
@@ -62,6 +68,9 @@ func BuildAgent(opts AgentOptions) error {
 		} else {
 			binName = "kunari"
 		}
+	}
+	if err := validateBinName(binName); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(out, 0o700); err != nil {
@@ -81,19 +90,12 @@ func BuildAgent(opts AgentOptions) error {
 
 	// Path of the hub HMAC key file inside the package (not a credential value).
 	ingestRel := filepath.Join("etc", "ingest.secret") // #nosec G101 -- filename only
-	if opts.HubSecretFile != "" {
-		sec, err := safepath.Clean(opts.HubSecretFile)
-		if err != nil {
-			return fmt.Errorf("hub-secret-file: %w", err)
-		}
-		if err := copyFile(sec, filepath.Join(out, ingestRel), 0o600); err != nil {
-			return fmt.Errorf("copy hub ingest file: %w", err)
-		}
-	} else {
-		placeholder := []byte("# Place hub ingest HMAC key file here (hex), mode 0600.\n# Obtain from the hub data directory. Never embed in forged decoys.\n")
-		if err := os.WriteFile(filepath.Join(out, ingestRel), placeholder, 0o600); err != nil {
-			return err
-		}
+	sec, err := safepath.Clean(opts.HubSecretFile)
+	if err != nil {
+		return fmt.Errorf("hub-secret-file: %w", err)
+	}
+	if err := copyFile(sec, filepath.Join(out, ingestRel), 0o600); err != nil {
+		return fmt.Errorf("copy hub ingest file: %w", err)
 	}
 
 	cfgPath := filepath.Join(out, "etc", "sentinel.json")
@@ -124,7 +126,7 @@ func BuildAgent(opts AgentOptions) error {
 		return err
 	}
 
-	deploy := deployMarkdown(goos, prefix, binName, base, opts.HubSecretFile != "")
+	deploy := deployMarkdown(goos, prefix, binName, base, true)
 	if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
 		return err
 	}

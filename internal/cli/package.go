@@ -59,12 +59,13 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", "", "token_id from the forge manifest")
 	cmd.Flags().StringVar(&memo, "memo", "", "optional memo on the watch target")
 	cmd.Flags().StringVar(&hubURL, "hub-url", "", "hub base URL for sentinel HMAC push")
-	cmd.Flags().StringVar(&hubSecretFile, "hub-secret-file", "", "optional path to hub ingest.secret to embed")
-	cmd.Flags().StringVar(&prefix, "prefix", "", "install prefix override (optional)")
+	cmd.Flags().StringVar(&hubSecretFile, "hub-secret-file", "", "path to hub ingest.secret to embed (required)")
+	cmd.Flags().StringVar(&prefix, "prefix", "", "install prefix override (optional; safe absolute path only)")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("out")
 	_ = cmd.MarkFlagRequired("artifact")
 	_ = cmd.MarkFlagRequired("token")
 	_ = cmd.MarkFlagRequired("hub-url")
+	_ = cmd.MarkFlagRequired("hub-secret-file")
 	return cmd
 }

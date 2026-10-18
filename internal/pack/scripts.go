@@ -6,14 +6,17 @@ import (
 )
 
 func linuxInstall(prefix, binName string) string {
+	pq := shQuote(prefix)
+	bq := shQuote(binName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Kunari agent install (Linux). Authorized use only.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-PREFIX="%s"
-BIN_SRC="$ROOT/bin/%s"
-if [[ ! -x "$BIN_SRC" && ! -f "$BIN_SRC" ]]; then
-  echo "error: place %s in $ROOT/bin/ first" >&2
+PREFIX=%s
+BIN_NAME=%s
+BIN_SRC="$ROOT/bin/$BIN_NAME"
+if [[ ! -f "$BIN_SRC" ]]; then
+  echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
 fi
 if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret"; then
@@ -22,7 +25,7 @@ if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret
 fi
 id -u kunari >/dev/null 2>&1 || useradd --system --home "$PREFIX" --shell /usr/sbin/nologin kunari
 install -d -m 0700 -o kunari -g kunari "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" "$PREFIX/data" "$PREFIX/bin"
-install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/%s"
+install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 -o kunari -g kunari "$ROOT/decoys/"* "$PREFIX/decoys/"
@@ -30,7 +33,7 @@ install -m 0644 "$ROOT/kunari-sentinel.service" /etc/systemd/system/kunari-senti
 systemctl daemon-reload
 systemctl enable --now kunari-sentinel.service
 echo "installed under $PREFIX; service kunari-sentinel started"
-`, prefix, binName, binName, binName)
+`, pq, bq)
 }
 
 func linuxUnit(prefix, binName string) string {
@@ -56,14 +59,17 @@ WantedBy=multi-user.target
 }
 
 func darwinInstall(prefix, binName string) string {
+	pq := shQuote(prefix)
+	bq := shQuote(binName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Kunari agent install (macOS). Authorized use only. Prefer a dedicated operator account.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-PREFIX="%s"
-BIN_SRC="$ROOT/bin/%s"
+PREFIX=%s
+BIN_NAME=%s
+BIN_SRC="$ROOT/bin/$BIN_NAME"
 if [[ ! -f "$BIN_SRC" ]]; then
-  echo "error: place %s in $ROOT/bin/ first" >&2
+  echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
 fi
 if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret"; then
@@ -71,7 +77,7 @@ if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret
   exit 1
 fi
 install -d -m 0700 "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" "$PREFIX/data" "$PREFIX/bin"
-install -m 0755 "$BIN_SRC" "$PREFIX/bin/%s"
+install -m 0755 "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 "$ROOT/decoys/"* "$PREFIX/decoys/"
@@ -83,7 +89,7 @@ launchctl enable system/com.jimididit.kunari-sentinel
 launchctl kickstart -k system/com.jimididit.kunari-sentinel
 echo "installed under $PREFIX; launchd job started"
 echo "Note: Full Disk Access may be required for stronger macOS tiers."
-`, prefix, binName, binName, binName)
+`, pq, bq)
 }
 
 func darwinPlist(prefix, binName string) string {
@@ -113,38 +119,49 @@ func darwinPlist(prefix, binName string) string {
 }
 
 func windowsInstall(prefix, binName string) string {
-	// PowerShell: copy tree, create service via sc.exe.
-	// Avoid backticks in this template - Go raw strings cannot contain them.
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
-$BinSrc = Join-Path $Root 'bin\%s'
+$BinName = '%s'
+$BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
-  throw "Place %s in $Root\bin\ first"
+  throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
 }
 $Secret = Join-Path $Root 'etc\ingest.secret'
 $secText = Get-Content -LiteralPath $Secret -Raw
 if ($secText -match '^\s*#' -or [string]::IsNullOrWhiteSpace($secText)) {
   throw 'etc\ingest.secret missing or still a placeholder'
 }
-New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'), (Join-Path $Prefix 'etc'), (Join-Path $Prefix 'data'), (Join-Path $Prefix 'bin') | Out-Null
-Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix 'bin\%s') -Force
-Copy-Item -LiteralPath (Join-Path $Root 'etc\sentinel.json') -Destination (Join-Path $Prefix 'etc\sentinel.json') -Force
-Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secret') -Force
-Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
-$Bin = Join-Path $Prefix 'bin\%s'
-$Cfg = Join-Path $Prefix 'etc\sentinel.json'
+
+# Stop existing service before replacing binaries.
 $svc = Get-Service -Name KunariSentinel -ErrorAction SilentlyContinue
 if ($svc) {
   Stop-Service KunariSentinel -Force -ErrorAction SilentlyContinue
   sc.exe delete KunariSentinel | Out-Null
+  Start-Sleep -Seconds 1
 }
+
+New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'), (Join-Path $Prefix 'etc'), (Join-Path $Prefix 'data'), (Join-Path $Prefix 'bin') | Out-Null
+Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix ('bin\' + $BinName)) -Force
+Copy-Item -LiteralPath (Join-Path $Root 'etc\sentinel.json') -Destination (Join-Path $Prefix 'etc\sentinel.json') -Force
+Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secret') -Force
+Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
+
+# Restrict package tree to local Administrators + SYSTEM.
+icacls $Prefix /inheritance:r | Out-Null
+icacls $Prefix /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+$IngestDst = Join-Path $Prefix 'etc\ingest.secret'
+icacls $IngestDst /inheritance:r | Out-Null
+icacls $IngestDst /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+
+$Bin = Join-Path $Prefix ('bin\' + $BinName)
+$Cfg = Join-Path $Prefix 'etc\sentinel.json'
 $BinPath = '"' + $Bin + '" sentinel run --config "' + $Cfg + '"'
 sc.exe create KunariSentinel binPath= $BinPath start= auto | Out-Null
 sc.exe description KunariSentinel "Kunari defensive tripwire sensor" | Out-Null
 Start-Service KunariSentinel
 Write-Host "installed under $Prefix; service KunariSentinel started"
-`, p, binName, binName, binName, binName)
+`, p, binName)
 }
