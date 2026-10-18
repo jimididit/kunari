@@ -9,6 +9,10 @@ import (
 type AllowEntry struct {
 	// MatchExe is matched against the process executable basename or full path (case-insensitive).
 	MatchExe string `json:"match_exe"`
+	// PathContains, when set, also requires the full executable path to contain this
+	// substring (case-insensitive; separators normalized to '/'). This stops a renamed
+	// attacker binary from silencing alerts merely by sharing a default basename.
+	PathContains string `json:"path_contains,omitempty"`
 	// Reason is recorded when matched (auditable, never silent).
 	Reason string `json:"reason"`
 }
@@ -16,15 +20,15 @@ type AllowEntry struct {
 // DefaultAllowlist returns known noisy helpers. Operators can extend via config.
 func DefaultAllowlist() []AllowEntry {
 	return []AllowEntry{
-		{MatchExe: "SearchProtocolHost.exe", Reason: "windows search indexer"},
-		{MatchExe: "SearchIndexer.exe", Reason: "windows search indexer"},
-		{MatchExe: "MsMpEng.exe", Reason: "windows defender"},
-		{MatchExe: "MpCopyAccelerator.exe", Reason: "windows defender"},
-		{MatchExe: "updatedb", Reason: "linux locate db"},
-		{MatchExe: "mlocate", Reason: "linux locate"},
-		{MatchExe: "plocate", Reason: "linux locate"},
-		{MatchExe: "tracker-miner-fs", Reason: "gnome tracker"},
-		{MatchExe: "baloo_file", Reason: "kde baloo"},
+		{MatchExe: "SearchProtocolHost.exe", PathContains: "/windows/", Reason: "windows search indexer"},
+		{MatchExe: "SearchIndexer.exe", PathContains: "/windows/", Reason: "windows search indexer"},
+		{MatchExe: "MsMpEng.exe", PathContains: "/windows defender/", Reason: "windows defender"},
+		{MatchExe: "MpCopyAccelerator.exe", PathContains: "/windows defender/", Reason: "windows defender"},
+		{MatchExe: "updatedb", PathContains: "/usr/", Reason: "linux locate db"},
+		{MatchExe: "mlocate", PathContains: "/usr/", Reason: "linux locate"},
+		{MatchExe: "plocate", PathContains: "/usr/", Reason: "linux locate"},
+		{MatchExe: "tracker-miner-fs", PathContains: "/usr/", Reason: "gnome tracker"},
+		{MatchExe: "baloo_file", PathContains: "/usr/", Reason: "kde baloo"},
 	}
 }
 
@@ -33,15 +37,24 @@ func MatchAllowlist(exe string, list []AllowEntry) (matched bool, reason string)
 		return false, ""
 	}
 	full := strings.ToLower(filepath.Clean(exe))
+	norm := strings.ReplaceAll(full, `\`, "/")
 	base := crossPlatformBase(full)
 	for _, e := range list {
 		m := strings.ToLower(strings.TrimSpace(e.MatchExe))
 		if m == "" {
 			continue
 		}
-		if base == m || full == m || strings.HasSuffix(full, "/"+m) || strings.HasSuffix(full, `\`+m) {
-			return true, e.Reason
+		nameOK := base == m || full == m || strings.HasSuffix(full, "/"+m) || strings.HasSuffix(full, `\`+m)
+		if !nameOK {
+			continue
 		}
+		if hint := strings.ToLower(strings.TrimSpace(e.PathContains)); hint != "" {
+			hint = strings.ReplaceAll(hint, `\`, "/")
+			if !strings.Contains(norm, hint) {
+				continue
+			}
+		}
+		return true, e.Reason
 	}
 	return false, ""
 }

