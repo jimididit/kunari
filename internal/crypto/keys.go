@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+
+	"github.com/jimididit/kunari/internal/safepath"
 )
 
 // KeyPair holds an Ed25519 signing key used for manifests and event chains.
@@ -54,7 +56,11 @@ func LoadOrCreate(path string) (*KeyPair, error) {
 	if path == "" {
 		return Generate()
 	}
-	data, err := os.ReadFile(path)
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path) // path cleaned by safepath.Clean
 	if err == nil {
 		return ParsePrivateHex(string(trimSpace(data)))
 	}

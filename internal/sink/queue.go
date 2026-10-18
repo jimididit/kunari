@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jimididit/kunari/internal/event"
+	"github.com/jimididit/kunari/internal/safepath"
 )
 
 // Queue is a disk-backed store-and-forward fan-out. Sink failures are logged and
@@ -28,6 +29,10 @@ type Queue struct {
 func NewQueue(dir string, log *slog.Logger, sinks ...Sink) (*Queue, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	dir, err := safepath.Clean(dir)
+	if err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -91,8 +96,13 @@ func (q *Queue) drain(ctx context.Context) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		path := filepath.Join(q.dir, e.Name())
-		b, err := os.ReadFile(path)
+		// Queue entries are only files we created under q.dir (basename from ReadDir).
+		name := filepath.Base(e.Name())
+		if name == "." || name == ".." || name != e.Name() {
+			continue
+		}
+		path := filepath.Join(q.dir, name)
+		b, err := os.ReadFile(path) // path confined to q.dir + basename
 		if err != nil {
 			continue
 		}

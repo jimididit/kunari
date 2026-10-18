@@ -63,7 +63,11 @@ func New(cfg Config) (*Hub, error) {
 		_ = reg.Close()
 		return nil, err
 	}
-	fileSink := sink.NewFileSink(filepath.Join(cfg.DataDir, "alerts.jsonl"))
+	fileSink, err := sink.NewFileSink(filepath.Join(cfg.DataDir, "alerts.jsonl"))
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
 	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), cfg.Logger, fileSink, sink.NewStdoutSink())
 	if err != nil {
 		_ = reg.Close()

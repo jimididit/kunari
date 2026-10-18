@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	kcrypto "github.com/jimididit/kunari/internal/crypto"
+	"github.com/jimididit/kunari/internal/safepath"
 )
 
 const genesisPrev = "0"
@@ -26,8 +27,12 @@ type Chain struct {
 }
 
 func Open(path string, keys *kcrypto.KeyPair) (*Chain, error) {
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return nil, err
+	}
 	c := &Chain{path: path, keys: keys, prevHash: genesisPrev}
-	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600) // path cleaned by safepath.Clean
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +80,7 @@ func (c *Chain) Append(ev *Event) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(c.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(c.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // c.path cleaned at Open
 	if err != nil {
 		return err
 	}
@@ -89,7 +94,11 @@ func (c *Chain) Append(ev *Event) error {
 
 // VerifyFile checks chain continuity and signatures.
 func VerifyFile(path string, pub ed25519.PublicKey) error {
-	f, err := os.Open(path)
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path) // path cleaned by safepath.Clean
 	if err != nil {
 		return err
 	}

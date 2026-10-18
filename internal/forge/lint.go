@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/jimididit/kunari/internal/safepath"
 )
 
 // LintResult reports static tells that may fingerprint Kunari artifacts.
@@ -13,7 +15,11 @@ type LintResult struct {
 }
 
 func LintFile(path string) (*LintResult, error) {
-	b, err := os.ReadFile(path)
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path) // path cleaned by safepath.Clean
 	if err != nil {
 		return nil, err
 	}
