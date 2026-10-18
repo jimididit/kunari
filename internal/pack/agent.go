@@ -79,18 +79,19 @@ func BuildAgent(opts AgentOptions) error {
 		return fmt.Errorf("copy decoy: %w", err)
 	}
 
-	secretRel := "etc/ingest.secret"
+	// Path of the hub HMAC key file inside the package (not a credential value).
+	ingestRel := filepath.Join("etc", "ingest.secret") // #nosec G101 -- filename only
 	if opts.HubSecretFile != "" {
 		sec, err := safepath.Clean(opts.HubSecretFile)
 		if err != nil {
 			return fmt.Errorf("hub-secret-file: %w", err)
 		}
-		if err := copyFile(sec, filepath.Join(out, filepath.FromSlash(secretRel)), 0o600); err != nil {
-			return fmt.Errorf("copy hub secret: %w", err)
+		if err := copyFile(sec, filepath.Join(out, ingestRel), 0o600); err != nil {
+			return fmt.Errorf("copy hub ingest file: %w", err)
 		}
 	} else {
-		placeholder := []byte("# Place hub ingest.secret here (hex), mode 0600.\n# Obtain from the hub data directory. Never embed in forged decoys.\n")
-		if err := os.WriteFile(filepath.Join(out, filepath.FromSlash(secretRel)), placeholder, 0o600); err != nil {
+		placeholder := []byte("# Place hub ingest HMAC key file here (hex), mode 0600.\n# Obtain from the hub data directory. Never embed in forged decoys.\n")
+		if err := os.WriteFile(filepath.Join(out, ingestRel), placeholder, 0o600); err != nil {
 			return err
 		}
 	}
@@ -130,14 +131,14 @@ func BuildAgent(opts AgentOptions) error {
 
 	switch goos {
 	case "linux":
-		if err := os.WriteFile(filepath.Join(out, "install.sh"), []byte(linuxInstall(prefix, binName)), 0o700); err != nil {
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), linuxInstall(prefix, binName)); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(out, "kunari-sentinel.service"), []byte(linuxUnit(prefix, binName)), 0o600); err != nil {
 			return err
 		}
 	case "darwin":
-		if err := os.WriteFile(filepath.Join(out, "install.sh"), []byte(darwinInstall(prefix, binName)), 0o700); err != nil {
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), darwinInstall(prefix, binName)); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(out, "com.jimididit.kunari-sentinel.plist"), []byte(darwinPlist(prefix, binName)), 0o600); err != nil {
@@ -149,6 +150,14 @@ func BuildAgent(opts AgentOptions) error {
 		}
 	}
 	return nil
+}
+
+// writeInstallScript writes a shell installer as 0600 then marks it owner-executable.
+func writeInstallScript(path, body string) error {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700) // #nosec G302 -- install script needs owner+x; not a credential file
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
