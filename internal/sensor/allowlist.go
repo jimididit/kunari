@@ -32,16 +32,30 @@ func MatchAllowlist(exe string, list []AllowEntry) (matched bool, reason string)
 	if exe == "" {
 		return false, ""
 	}
-	base := strings.ToLower(filepath.Base(exe))
-	full := strings.ToLower(exe)
+	full := strings.ToLower(filepath.Clean(exe))
+	base := crossPlatformBase(full)
 	for _, e := range list {
 		m := strings.ToLower(strings.TrimSpace(e.MatchExe))
 		if m == "" {
 			continue
 		}
-		if base == m || full == m || strings.HasSuffix(full, string(filepath.Separator)+m) {
+		if base == m || full == m || strings.HasSuffix(full, "/"+m) || strings.HasSuffix(full, `\`+m) {
 			return true, e.Reason
 		}
 	}
 	return false, ""
+}
+
+// crossPlatformBase returns the final path component for Windows or Unix paths
+// even when the host OS separator differs from the recorded process path.
+func crossPlatformBase(path string) string {
+	path = strings.ReplaceAll(path, `\`, "/")
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return ""
+	}
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
