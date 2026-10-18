@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Kunari hub</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand-block">
+        <p class="brand">Kunari</p>
+        <p class="tag">hub operator console</p>
+      </div>
+      <div id="session-bar" class="session-bar hidden">
+        <span id="conn-pill" class="pill muted">offline</span>
+        <button type="button" id="btn-logout" class="btn ghost">Sign out</button>
+      </div>
+    </header>
+
+    <section id="login-view" class="panel login">
+      <h1>Operator sign-in</h1>
+      <p class="lede">Paste the hub API token from <code>api.token</code> under the hub data directory. The token stays in this browser tab only (sessionStorage) and is never embedded in forged artifacts.</p>
+      <form id="login-form">
+        <label for="api-token">API token</label>
+        <input id="api-token" name="token" type="password" autocomplete="off" spellcheck="false" required>
+        <button type="submit" class="btn primary">Connect</button>
+        <p id="login-error" class="error" hidden></p>
+      </form>
+    </section>
+
+    <section id="console-view" class="console hidden">
+      <div class="status-row" id="status-row" aria-live="polite">
+        <div class="stat"><span class="label">hits</span><span id="stat-hits" class="value">-</span></div>
+        <div class="stat"><span class="label">last seq</span><span id="stat-seq" class="value">-</span></div>
+        <div class="stat"><span class="label">queue</span><span id="stat-queue" class="value">-</span></div>
+        <div class="stat wide"><span class="label">sinks</span><span id="stat-sinks" class="value mono">-</span></div>
+      </div>
+
+      <div class="grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Live events</h2>
+            <button type="button" id="btn-clear-events" class="btn ghost">Clear view</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>seq</th>
+                  <th>time</th>
+                  <th>action</th>
+                  <th>detector</th>
+                  <th>tier</th>
+                  <th>token</th>
+                  <th>memo</th>
+                </tr>
+              </thead>
+              <tbody id="events-body"></tbody>
+            </table>
+          </div>
+          <p id="events-empty" class="empty">Waiting for events…</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Registry tokens</h2>
+            <button type="button" id="btn-refresh-tokens" class="btn ghost">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>name</th>
+                  <th>status</th>
+                  <th>type</th>
+                  <th>authz</th>
+                  <th>token</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="tokens-body"></tbody>
+            </table>
+          </div>
+          <p id="tokens-empty" class="empty">No tokens in this hub registry.</p>
+        </section>
+      </div>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

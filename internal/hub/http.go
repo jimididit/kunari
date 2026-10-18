@@ -11,6 +11,8 @@ import (
 
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", h.handleUIRedirect)
+	mux.Handle("GET /ui/", uiStaticHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -26,6 +28,9 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
 	mux.HandleFunc("GET /api/v1/events", h.requireAPIAuth(false, h.handleListEvents))
 	mux.HandleFunc("GET /api/v1/events/stream", h.requireAPIAuth(true, h.handleEventStream))
+	mux.HandleFunc("GET /api/v1/status", h.requireAPIAuth(false, h.handleOperatorStatus))
+	mux.HandleFunc("GET /api/v1/tokens", h.requireAPIAuth(false, h.handleListTokens))
+	mux.HandleFunc("POST /api/v1/tokens/{token}/revoke", h.requireAPIAuth(false, h.handleRevokeToken))
 	return mux
 }
 

@@ -87,6 +87,32 @@ func (q *Queue) Close() {
 	q.mu.Unlock()
 }
 
+// Stats is a point-in-time view of pending queue depth and configured sinks.
+type Stats struct {
+	Pending int      `json:"pending"`
+	Sinks   []string `json:"sinks"`
+}
+
+func (q *Queue) Stats() Stats {
+	q.mu.Lock()
+	sinks := make([]string, 0, len(q.sinks))
+	for _, s := range q.sinks {
+		sinks = append(sinks, s.Name())
+	}
+	q.mu.Unlock()
+
+	pending := 0
+	entries, err := os.ReadDir(q.dir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+				pending++
+			}
+		}
+	}
+	return Stats{Pending: pending, Sinks: sinks}
+}
+
 func (q *Queue) drain(ctx context.Context) {
 	entries, err := os.ReadDir(q.dir)
 	if err != nil {
