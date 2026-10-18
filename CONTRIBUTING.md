@@ -20,6 +20,10 @@ Kunari is for defensive / DFIR deployment on systems you are authorized to monit
 
 Local research, planning, and capability matrices live under paths listed in `.gitignore` (`docs/`, `PLAN.md`, etc.). Do not force-add them. Public documentation belongs in `README.md` and future curated `doc/` pages when we publish them intentionally.
 
+## Style
+
+Prefer plain ASCII hyphens (`-`) in docs, comments, and commit messages. Avoid en dashes and em dashes.
+
 ## Development
 
 ```bash
