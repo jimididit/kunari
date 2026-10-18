@@ -25,6 +25,7 @@ type Config struct {
 	RegistryDB       string
 	KeyPath          string
 	IngestSecretPath string // default: <data>/ingest.secret
+	APITokenPath     string // default: <data>/api.token (Bearer for pull/SSE)
 	// TrustedProxies are CIDRs (or bare IPs) allowed to set ClientIPHeader.
 	// Empty (default): always use RemoteAddr; never trust X-Forwarded-For.
 	TrustedProxies []string
@@ -42,7 +43,9 @@ type Hub struct {
 	queue          *sink.Queue
 	throttle       *sink.Throttle
 	ingestSecret   []byte
+	apiToken       []byte
 	seen           *seenIDs
+	subs           *apiSubs
 	trustedProxies []*net.IPNet
 	mu             sync.Mutex
 	hits           int
@@ -95,6 +98,16 @@ func New(cfg Config) (*Hub, error) {
 		return nil, err
 	}
 	cfg.Logger.Info("hub ingest enabled", "secret_path", secretPath)
+	apiPath := cfg.APITokenPath
+	if apiPath == "" {
+		apiPath = filepath.Join(cfg.DataDir, "api.token")
+	}
+	apiToken, err := loadOrCreateAPIToken(apiPath)
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
+	cfg.Logger.Info("hub API token enabled", "token_path", apiPath)
 	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
 	if err != nil {
 		_ = reg.Close()
@@ -116,7 +129,9 @@ func New(cfg Config) (*Hub, error) {
 		queue:          q,
 		throttle:       sink.NewThrottle(time.Minute),
 		ingestSecret:   ingestSecret,
+		apiToken:       apiToken,
 		seen:           newSeenIDs(8192),
+		subs:           newAPISubs(),
 		trustedProxies: trusted,
 	}, nil
 }
@@ -210,6 +225,7 @@ func (h *Hub) recordBeacon(tokenID, tier string, netInfo *event.Network) error {
 	if err := h.chain.Append(ev); err != nil {
 		return err
 	}
+	h.subs.Broadcast(ev)
 	if allow {
 		if err := h.queue.Enqueue(ev); err != nil {
 			return err

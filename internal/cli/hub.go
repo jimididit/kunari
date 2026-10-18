@@ -21,6 +21,7 @@ func newHubCmd() *cobra.Command {
 		dataDir        string
 		keyPath        string
 		ingestSecret   string
+		apiToken       string
 		collectLvl     string
 		trustedProxies []string
 		clientIPHeader string
@@ -45,6 +46,7 @@ func newHubCmd() *cobra.Command {
 				RegistryDB:       filepath.Join(dataDir, "registry.db"),
 				KeyPath:          keyPath,
 				IngestSecretPath: ingestSecret,
+				APITokenPath:     apiToken,
 				TrustedProxies:   trustedProxies,
 				ClientIPHeader:   clientIPHeader,
 				Collect:          lvl,
@@ -66,6 +68,7 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dataDir, "data", "./data", "data directory")
 	cmd.Flags().StringVar(&keyPath, "key", "", "signing key path (default: <data>/signing.key)")
 	cmd.Flags().StringVar(&ingestSecret, "ingest-secret", "", "HMAC ingest secret path (default: <data>/ingest.secret)")
+	cmd.Flags().StringVar(&apiToken, "api-token", "", "operator API bearer token path (default: <data>/api.token)")
 	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil, "CIDR/IP of reverse proxies allowed to set client-IP header (repeatable); empty = trust RemoteAddr only")
 	cmd.Flags().StringVar(&clientIPHeader, "client-ip-header", "X-Forwarded-For", "header used when peer matches --trusted-proxy")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
@@ -75,6 +78,9 @@ func newHubCmd() *cobra.Command {
 		}
 		if ingestSecret == "" {
 			ingestSecret = filepath.Join(dataDir, "ingest.secret")
+		}
+		if apiToken == "" {
+			apiToken = filepath.Join(dataDir, "api.token")
 		}
 		return nil
 	}

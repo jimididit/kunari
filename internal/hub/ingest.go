@@ -149,6 +149,7 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	if err := h.chain.Append(ev); err != nil {
 		return err
 	}
+	h.subs.Broadcast(ev)
 	if allow {
 		if err := h.queue.Enqueue(ev); err != nil {
 			return err

@@ -61,6 +61,18 @@ kunari sentinel run --config sentinel.json
 
 Hub accepts `POST /api/v1/ingest` (HMAC-SHA256, same headers as webhook sinks). Share `ingest.secret` with sentinels; never embed it in forged artifacts. Webhook sinks allow RFC1918 by default (on-prem SIEM); use `sink.WebhookOptions{DenyPrivate: true}` for cloud-only egress.
 
+Operator read API (Bearer from `data/api.token`):
+
+```bash
+# Pull (header auth required)
+curl -s -H "Authorization: Bearer $(tr -d '\n' < data/api.token)" \
+  'http://127.0.0.1:8443/api/v1/events?after_seq=0&limit=50'
+
+# Live SSE (EventSource may use ?token=)
+curl -N -H "Authorization: Bearer $(tr -d '\n' < data/api.token)" \
+  'http://127.0.0.1:8443/api/v1/events/stream'
+```
+
 Lab walkthroughs: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
 
 ## Releases
