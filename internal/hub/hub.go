@@ -93,7 +93,15 @@ func (h *Hub) Close() error {
 }
 
 func (h *Hub) Run(ctx context.Context) error {
-	go h.queue.Run(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.queue.Run(ctx)
+	}()
 
 	httpSrv := &http.Server{
 		Addr:              h.cfg.HTTPListen,
@@ -110,7 +118,9 @@ func (h *Hub) Run(ctx context.Context) error {
 	}()
 
 	if h.cfg.DNSListen != "" && h.cfg.DNSZone != "" {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			h.log.Info("hub dns listening", "addr", h.cfg.DNSListen, "zone", h.cfg.DNSZone)
 			if err := h.serveDNS(ctx); err != nil && ctx.Err() == nil {
 				errCh <- err
@@ -120,11 +130,17 @@ func (h *Hub) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
 		_ = httpSrv.Shutdown(shutdownCtx)
+		wg.Wait()
 		return nil
 	case err := <-errCh:
+		cancel()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = httpSrv.Shutdown(shutdownCtx)
+		stop()
+		wg.Wait()
 		return err
 	}
 }
