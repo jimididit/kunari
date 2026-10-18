@@ -70,10 +70,9 @@ func (h *Hub) handleListEventsStub(w http.ResponseWriter, r *http.Request) {
 }
 
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
+	// Do not trust X-Forwarded-For by default: clients can spoof it without a
+	// trusted reverse-proxy hop. Operators terminating TLS should log RemoteAddr
+	// at the proxy and pass real client IP via a controlled header later.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

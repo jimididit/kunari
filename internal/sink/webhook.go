@@ -22,6 +22,7 @@ const (
 	HeaderSignature = "X-Kunari-Signature"
 	HeaderTimestamp = "X-Kunari-Timestamp"
 	HeaderEventID   = "X-Kunari-Event-Id"
+	minSecretLen    = 16
 )
 
 type WebhookSink struct {
@@ -31,16 +32,28 @@ type WebhookSink struct {
 }
 
 func NewWebhookSink(rawURL string, secret []byte) (*WebhookSink, error) {
+	if len(secret) < minSecretLen {
+		return nil, fmt.Errorf("webhook secret must be at least %d bytes", minSecretLen)
+	}
 	if err := validateWebhookURL(rawURL); err != nil {
 		return nil, err
 	}
 	return &WebhookSink{
 		url:    rawURL,
-		secret: secret,
+		secret: append([]byte(nil), secret...),
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
+			},
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           safeDialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          4,
+				IdleConnTimeout:       30 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
 			},
 		},
 	}, nil
@@ -93,13 +106,13 @@ func validateWebhookURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("webhook host required")
 	}
-	if isBlockedHost(host) {
-		return fmt.Errorf("webhook host %q blocked (link-local/metadata)", host)
+	if isBlockedHostLiteral(host) {
+		return fmt.Errorf("webhook host %q blocked (loopback/link-local/metadata)", host)
 	}
 	return nil
 }
 
-func isBlockedHost(host string) bool {
+func isBlockedHostLiteral(host string) bool {
 	h := strings.ToLower(host)
 	if h == "localhost" || h == "metadata.google.internal" || strings.HasSuffix(h, ".localhost") {
 		return true
@@ -108,15 +121,56 @@ func isBlockedHost(host string) bool {
 	if ip == nil {
 		return false
 	}
-	// Block loopback/link-local/metadata by default (SSRF). RFC1918 private
-	// ranges are allowed so operators can reach on-prem SIEMs; tighten via
-	// allowlists in a later release if needed.
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() || h == "169.254.169.254"
+	return isBlockedIP(ip)
 }
 
-// AllowLocalWebhook is for tests only - production NewWebhookSink blocks loopback.
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	// Loopback/link-local/metadata/multicast. RFC1918 remains allowed for on-prem SIEM.
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified()
+}
+
+// safeDialContext resolves the host and refuses destinations that land on blocked IPs
+// (DNS rebinding / metadata SSRF). Only dials a non-blocked address.
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if isBlockedHostLiteral(host) {
+		return nil, fmt.Errorf("webhook host %q blocked", host)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var last error
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	for _, ipa := range ips {
+		if isBlockedIP(ipa.IP) {
+			last = fmt.Errorf("webhook resolved to blocked address %s", ipa.IP)
+			continue
+		}
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = fmt.Errorf("webhook host %q has no usable addresses", host)
+	}
+	return nil, last
+}
+
+// NewWebhookSinkAllowLocal is for tests only - skips destination IP guards.
 func NewWebhookSinkAllowLocal(rawURL string, secret []byte) (*WebhookSink, error) {
+	if len(secret) < minSecretLen {
+		return nil, fmt.Errorf("webhook secret must be at least %d bytes", minSecretLen)
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -126,7 +180,7 @@ func NewWebhookSinkAllowLocal(rawURL string, secret []byte) (*WebhookSink, error
 	}
 	return &WebhookSink{
 		url:    rawURL,
-		secret: secret,
+		secret: append([]byte(nil), secret...),
 		client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
