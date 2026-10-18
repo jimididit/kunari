@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 2 adds the on-host `sentinel` sensor (Linux + Windows). macOS sentinel tiers land in Phase 3. Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
+Phase 3 adds macOS sentinel tiers (`mac-eslogger` preferred, `mac-fsevents` fallback) plus cross-platform `copy_suspected` correlation (always inferred). Detection tiers are reported honestly - Kunari will not claim capabilities it has not armed.
 
 ## Components
 
@@ -18,7 +18,7 @@ Phase 2 adds the on-host `sentinel` sensor (Linux + Windows). macOS sentinel tie
 | `kunari lint` | Scan generated artifacts for static fingerprint tells |
 | `kunari verify` | Verify hash-chained, signed local event logs |
 | `kunari hub` | Self-hosted HTTPS (+ DNS) beacon collector and alert fan-out |
-| `kunari sentinel` | On-host sensor (Linux fanotify/inotify, Windows SACL-4663/RDC) |
+| `kunari sentinel` | On-host sensor (Linux fanotify/inotify, Windows SACL-4663/RDC, macOS eslogger/FSEvents) |
 
 ## Guardrails
 

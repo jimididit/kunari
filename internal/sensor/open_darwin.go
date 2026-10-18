@@ -5,9 +5,36 @@ package sensor
 import "fmt"
 
 func OpenBest(targets []Target) (Watcher, error) {
-	return nil, fmt.Errorf("macOS sentinel tiers (eslogger/FSEvents) are Phase 3; not armed yet")
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no targets")
+	}
+	w, esErr := newESLogger(targets)
+	if esErr == nil {
+		return w, nil
+	}
+	fw, fsErr := newFSEvents(targets)
+	if fsErr == nil {
+		return fw, nil
+	}
+	return nil, fmt.Errorf("eslogger: %v; fsevents: %w", esErr, fsErr)
 }
 
 func PlatformInstallHints(targets []Target) string {
-	return "# macOS sentinel (eslogger / Endpoint Security) arrives in Phase 3.\n"
+	return `# Kunari macOS sentinel setup
+
+## Preferred tier: mac-eslogger (macOS 13+)
+1. Grant Terminal/kunari Full Disk Access (System Settings > Privacy & Security).
+2. Run elevated: sudo kunari sentinel run --config sentinel.json
+3. eslogger must be present (ships with macOS Ventura+).
+
+## Fallback tier: mac-fsevents
+Used automatically when eslogger is unavailable or cannot start.
+Sees modify/delete/rename only - not reads/opens, and no process attribution.
+
+## Endpoint Security system extension
+Shipping a notarized ES client is out of scope for v0.1 (Phase 3 uses eslogger CLI).
+
+## WebDAV canary filesystem
+Evaluated as a later enhancement (see internal research notes); not armed in this release.
+`
 }

@@ -21,7 +21,8 @@ type Runner struct {
 	keys    *kcrypto.KeyPair
 	chain   *event.Chain
 	queue   *sink.Queue
-	byPath  map[string]Target
+	byPath   map[string]Target
+	copyCorr *copyCorrelator
 }
 
 func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
@@ -61,6 +62,7 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	}
 	return &Runner{
 		Cfg: cfg, Log: log, Watcher: w, keys: keys, chain: chain, queue: q, byPath: byPath,
+		copyCorr: newCopyCorrelator(defaultCopyWindow),
 	}, nil
 }
 
@@ -162,6 +164,9 @@ func (r *Runner) handleTouch(ctx context.Context, t Touch) {
 	ev.ObservedAt = t.Occurred
 	if !t.Proven {
 		ev.Confidence.Action = "inferred"
+	}
+	if r.copyCorr != nil && r.copyCorr.Suspect(t, exe) {
+		ev.Confidence.CopySuspected = true
 	}
 	ev.File = &event.FileInfo{Path: t.Path}
 	hn, _ := os.Hostname()
