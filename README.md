@@ -21,7 +21,7 @@ Kunari helps you plant decoy files, watch them for unauthorized touch, collect s
 - **Hub** HTTPS (+ optional DNS) collector with HMAC ingest from sentinels
 - **Evidence** hash-chained, Ed25519-signed event logs (`kunari verify`)
 - **Alerts** disk-backed queue - sink failures are surfaced, never silently disabled
-- **Operator API** authenticated event pull + live SSE stream
+- **Operator API + UI** authenticated event pull, live SSE, and a thin hub console at `/ui/`
 
 ## Install
 
@@ -70,6 +70,7 @@ kunari forge --type env --name app-secrets --detect both \
 
 # 2) Run the hub (creates ingest.secret + api.token under ./data)
 kunari hub --listen 127.0.0.1:8080 --data ./data
+# Optional: open http://127.0.0.1:8080/ui/ and paste the contents of ./data/api.token
 
 # 3) Arm a sentinel (share the hub ingest secret; never put it in the decoy)
 kunari sentinel init-config \
@@ -109,11 +110,15 @@ Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Ne
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
+| `GET /` → `/ui/` | none | Operator console (API token entered in-browser; sessionStorage only) |
 | `GET /healthz` | none | Liveness + hit counters |
 | `GET\|HEAD /b/{token}` | none | HTTPS beacon |
 | `POST /api/v1/ingest` | HMAC (`X-Kunari-*`) | Sentinel event push |
+| `GET /api/v1/status` | Bearer / `X-Kunari-API-Key` | Hits, last seq, queue depth, sink names |
 | `GET /api/v1/events` | Bearer / `X-Kunari-API-Key` | Paginated pull (`after_seq`, `limit`) |
 | `GET /api/v1/events/stream` | Bearer or `?token=` | Live SSE |
+| `GET /api/v1/tokens` | Bearer / `X-Kunari-API-Key` | Registry inventory (no signatures) |
+| `POST /api/v1/tokens/{id}/revoke` | Bearer / `X-Kunari-API-Key` | Revoke a forged token |
 
 Behind a TLS terminator:
 
@@ -131,7 +136,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 
 ## Status
 
-**v0.2.0** is the current release: sentinel→hub HMAC ingest, trusted-proxy client IP, webhook `DenyPrivate`, and an authenticated events API + SSE. A thin hub UI and privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) are on the roadmap.
+**v0.2.0** is the current release. `main` also has a thin hub operator UI (`/ui/`) over the auth API (live events, status, token revoke). Privileged lab proofs (fanotify / Windows SACL / macOS Endpoint Security) remain on the roadmap.
 
 ## Contributing
 
