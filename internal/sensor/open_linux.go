@@ -26,6 +26,7 @@ func OpenBest(targets []Target) (Watcher, error) {
 
 func PlatformInstallHints(targets []Target) string {
 	var b strings.Builder
+	b.WriteString("# OPSEC: audit rules below name watched paths in /etc/audit - restrict root access to that file.\n")
 	b.WriteString("# Kunari auditd rules (requires root; conflicts with -e 2 immutable mode)\n")
 	b.WriteString("# Prefer fanotify when CAP_SYS_ADMIN is available (no auditd required).\n")
 	b.WriteString("# Install: /etc/audit/rules.d/kunari.rules && augenrules --load\n")

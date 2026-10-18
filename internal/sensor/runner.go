@@ -36,6 +36,9 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
+	if err := hardenPrivateDir(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("sentinel data_dir: %w", err)
+	}
 	keyPath := cfg.KeyPath
 	if keyPath == "" {
 		keyPath = filepath.Join(cfg.DataDir, "signing.key")
@@ -59,7 +62,8 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 			return nil, err
 		}
 		sinks = append(sinks, hubSink)
-		log.Info("sentinel hub push enabled", "url", strings.TrimRight(cfg.HubURL, "/")+"/api/v1/ingest")
+		// Log host only - full ingest URL and paths help local enumerators.
+		log.Info("sentinel hub push enabled", "hub", hubPushLogHost(cfg.HubURL))
 	}
 	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), log, sinks...)
 	if err != nil {

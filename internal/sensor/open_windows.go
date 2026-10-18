@@ -23,6 +23,7 @@ func OpenBest(targets []Target) (Watcher, error) {
 
 func PlatformInstallHints(targets []Target) string {
 	var b strings.Builder
+	b.WriteString("# OPSEC: restrict ACL on sentinel.json, ingest.secret, and data_dir to the service account.\n")
 	b.WriteString("# Kunari Windows SACL / audit setup (run elevated PowerShell)\n")
 	b.WriteString("# AccessMask: 0x1 ReadData, 0x2 WriteData, 0x10000 DELETE (also rename).\n\n")
 	b.WriteString("auditpol /set /subcategory:\"File System\" /success:enable\n\n")

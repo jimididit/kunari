@@ -37,6 +37,7 @@ Point a reverse proxy with TLS at the hub for realistic HTTPS beacons, or use DN
   --hub-url http://127.0.0.1:8443 \
   --hub-secret-file ./data/hub/ingest.secret \
   --out ./data/sentinel.json
+# init-config writes mode 0600; keep data_dir 0700 and secrets private.
 # Ensure data_dir in sentinel.json is writable; then:
 ./bin/kunari sentinel install-hints --config ./data/sentinel.json
 ./bin/kunari sentinel run --config ./data/sentinel.json
