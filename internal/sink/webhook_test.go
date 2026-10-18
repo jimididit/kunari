@@ -18,18 +18,27 @@ import (
 )
 
 func TestWebhookSSRFBlock(t *testing.T) {
-	_, err := sink.NewWebhookSink("http://127.0.0.1:9/hook", []byte("secret"))
+	secret := []byte("0123456789abcdef")
+	_, err := sink.NewWebhookSink("http://127.0.0.1:9/hook", secret)
 	if err == nil {
 		t.Fatal("expected loopback block")
 	}
-	_, err = sink.NewWebhookSink("http://169.254.169.254/latest", []byte("secret"))
+	_, err = sink.NewWebhookSink("http://169.254.169.254/latest", secret)
 	if err == nil {
 		t.Fatal("expected metadata block")
+	}
+	_, err = sink.NewWebhookSink("http://[::1]:9/hook", secret)
+	if err == nil {
+		t.Fatal("expected IPv6 loopback block")
+	}
+	_, err = sink.NewWebhookSink("https://example.com/hook", []byte("short"))
+	if err == nil {
+		t.Fatal("expected short secret rejection")
 	}
 }
 
 func TestWebhookHMAC(t *testing.T) {
-	secret := []byte("test-secret")
+	secret := []byte("0123456789abcdef")
 	var gotSig, gotTS string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotSig = r.Header.Get(sink.HeaderSignature)

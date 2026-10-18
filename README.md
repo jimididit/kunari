@@ -8,7 +8,7 @@ Cross-platform canary / tripwire toolkit for **DFIR and defensive** use.
 
 ## Status
 
-Phase 4 adds packaging and hardening: `kunari self-test`, fuzz targets, `govulncheck` / `gosec` / `semgrep` CI, and tagged releases via GoReleaser (SBOM + cosign). Detection tiers stay honest - Kunari will not claim capabilities it has not armed.
+Phase 5 closes the v0.1 engineering audit (webhook SSRF hardening, hub client-IP handling). Packaging, security CI, and honest detection-tier reporting remain in place.
 
 ## Components
 
@@ -65,4 +65,4 @@ Use feature branches and pull requests against `main`. Keep secrets and local re
 
 ## Security
 
-CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.
+CI runs `govulncheck`, `gosec`, and Semgrep (`p/golang`) on every PR. See [AUDIT_REPORT.md](AUDIT_REPORT.md) for the v0.1 self-audit and residual risk. Report vulnerabilities privately to the maintainer. Do not open public issues that include working exploit details against Kunari itself.

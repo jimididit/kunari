@@ -38,13 +38,17 @@ func TestHTTPSBeaconE2E(t *testing.T) {
 		_ = h.Run(ctx)
 		close(done)
 	}()
+	// Stop hub before t.TempDir cleanup so open queue/sqlite files are released.
 	t.Cleanup(func() {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(5 * time.Second):
+			t.Error("hub.Run did not exit")
 		}
-		_ = h.Close()
+		if err := h.Close(); err != nil {
+			t.Errorf("hub.Close: %v", err)
+		}
 	})
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -79,10 +83,13 @@ func TestHTTPSBeaconE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if len(body) == 0 {
+		t.Fatal("expected gif body")
 	}
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

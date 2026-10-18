@@ -12,9 +12,9 @@ docs/
 PLAN.md
 QUESTIONS.md
 TASKS.md
+CHANGELOG.internal.md
 AUDIT_REPORT.md
 ROADMAP.md
-CHANGELOG.internal.md
 
 # Build / test artifacts
 /dist/
