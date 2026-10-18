@@ -24,7 +24,7 @@ func newAPISubs() *apiSubs {
 }
 
 func (a *apiSubs) Subscribe() chan *event.Event {
-	ch := make(chan *event.Event, 32)
+	ch := make(chan *event.Event, 256)
 	a.mu.Lock()
 	a.subs[ch] = struct{}{}
 	a.mu.Unlock()
@@ -85,7 +85,8 @@ func apiTokenFromRequest(r *http.Request, allowQuery bool) string {
 	if v := r.Header.Get("X-Kunari-API-Key"); v != "" {
 		return strings.TrimSpace(v)
 	}
-	// EventSource cannot set headers; query token allowed only on the SSE route.
+	// EventSource cannot set Authorization headers. Query tokens may appear in
+	// reverse-proxy access logs - prefer Bearer when the client can set headers.
 	if allowQuery {
 		return strings.TrimSpace(r.URL.Query().Get("token"))
 	}
@@ -130,6 +131,9 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		h.log.Error("list events", "err", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
+	}
+	if events == nil {
+		events = []event.Event{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

@@ -2,8 +2,10 @@ package event
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/jimididit/kunari/internal/safepath"
@@ -13,6 +15,7 @@ const maxReadLine = 2 << 20 // 2 MiB per event line
 
 // ReadAfter returns up to limit events with Integrity.Seq > afterSeq.
 // nextSeq is the last returned seq (or afterSeq when empty).
+// A truncated trailing line (concurrent Append mid-write) is skipped, not fatal.
 func ReadAfter(path string, afterSeq uint64, limit int) (events []Event, nextSeq uint64, err error) {
 	if limit <= 0 {
 		limit = 100
@@ -33,30 +36,50 @@ func ReadAfter(path string, afterSeq uint64, limit int) (events []Event, nextSeq
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	buf := make([]byte, 0, 64*1024)
-	sc.Buffer(buf, maxReadLine)
+	r := bufio.NewReaderSize(f, 64*1024)
 	nextSeq = afterSeq
-	for sc.Scan() {
-		line := sc.Bytes()
+	for len(events) < limit {
+		line, readErr := r.ReadBytes('\n')
+		truncated := false
+		if readErr != nil {
+			if readErr != io.EOF {
+				return events, nextSeq, readErr
+			}
+			if len(line) == 0 {
+				break
+			}
+			// Last chunk without a trailing newline - may be an in-progress append.
+			truncated = true
+		}
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
+			if truncated {
+				break
+			}
 			continue
+		}
+		if len(line) > maxReadLine {
+			return events, nextSeq, fmt.Errorf("event line exceeds %d bytes", maxReadLine)
 		}
 		var ev Event
 		if err := json.Unmarshal(line, &ev); err != nil {
+			if truncated {
+				// Incomplete JSON at EOF while hub is appending - try again next page.
+				break
+			}
 			return events, nextSeq, fmt.Errorf("corrupt event log: %w", err)
 		}
 		if ev.Integrity.Seq <= afterSeq {
+			if truncated {
+				break
+			}
 			continue
 		}
 		events = append(events, ev)
 		nextSeq = ev.Integrity.Seq
-		if len(events) >= limit {
+		if truncated {
 			break
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return events, nextSeq, err
 	}
 	return events, nextSeq, nil
 }

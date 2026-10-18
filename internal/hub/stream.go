@@ -34,22 +34,33 @@ func (h *Hub) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Subscribe before backfill so live events during the read are not missed
-	// (duplicates filtered by seq).
+	// (duplicates filtered by seq). Drain the buffer between pages so Broadcast
+	// does not fill the channel during a long catch-up.
 	sub := h.subs.Subscribe()
 	defer h.subs.Unsubscribe(sub)
 
-	events, _, err := event.ReadAfter(h.chain.FilePath(), after, 1000)
-	if err != nil {
-		h.log.Error("sse backfill", "err", err)
-		return
-	}
-	for i := range events {
-		if err := writeSSEEvent(w, &events[i]); err != nil {
+	for {
+		drainSub(sub)
+		events, _, err := event.ReadAfter(h.chain.FilePath(), after, 1000)
+		if err != nil {
+			h.log.Error("sse backfill", "err", err)
 			return
 		}
-		flusher.Flush()
-		after = events[i].Integrity.Seq
+		if len(events) == 0 {
+			break
+		}
+		for i := range events {
+			if err := writeSSEEvent(w, &events[i]); err != nil {
+				return
+			}
+			flusher.Flush()
+			after = events[i].Integrity.Seq
+		}
+		if len(events) < 1000 {
+			break
+		}
 	}
+	drainSub(sub)
 
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -75,6 +86,16 @@ func (h *Hub) handleEventStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 			after = ev.Integrity.Seq
+		}
+	}
+}
+
+func drainSub(ch <-chan *event.Event) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
 		}
 	}
 }
