@@ -3,6 +3,7 @@
 
   var STORAGE_KEY = "kunari.hub.apiToken";
   var MAX_EVENTS = 200;
+  var RECONNECT_MS = 2000;
 
   var loginView = document.getElementById("login-view");
   var consoleView = document.getElementById("console-view");
@@ -16,9 +17,12 @@
   var tokensBody = document.getElementById("tokens-body");
   var tokensEmpty = document.getElementById("tokens-empty");
 
-  var es = null;
+  var liveAbort = null;
+  var reconnectTimer = null;
   var statusTimer = null;
   var seenSeq = Object.create(null);
+  var lastSeq = 0;
+  var wantLive = false;
 
   function token() {
     return sessionStorage.getItem(STORAGE_KEY) || "";
@@ -29,12 +33,18 @@
     else sessionStorage.removeItem(STORAGE_KEY);
   }
 
-  function authHeaders() {
-    return { Authorization: "Bearer " + token(), Accept: "application/json" };
+  function authHeaders(extra) {
+    var h = { Authorization: "Bearer " + token(), Accept: "application/json" };
+    if (extra) {
+      for (var k in extra) {
+        if (Object.prototype.hasOwnProperty.call(extra, k)) h[k] = extra[k];
+      }
+    }
+    return h;
   }
 
   function showLogin(msg) {
-    stopLive();
+    stopLive(true);
     loginView.classList.remove("hidden");
     consoleView.classList.add("hidden");
     sessionBar.classList.add("hidden");
@@ -84,7 +94,7 @@
 
   async function api(path, opts) {
     opts = opts || {};
-    var headers = Object.assign({}, authHeaders(), opts.headers || {});
+    var headers = authHeaders(opts.headers || {});
     var res = await fetch(path, {
       method: opts.method || "GET",
       headers: headers,
@@ -120,6 +130,7 @@
     if (seq != null) {
       if (seenSeq[seq]) return;
       seenSeq[seq] = true;
+      if (seq > lastSeq) lastSeq = seq;
     }
     eventsEmpty.classList.add("hidden");
     var tr = document.createElement("tr");
@@ -143,13 +154,6 @@
     while (eventsBody.children.length > MAX_EVENTS) {
       eventsBody.removeChild(eventsBody.lastChild);
     }
-  }
-
-  async function loadEvents() {
-    var data = await api("/api/v1/events?after_seq=0&limit=50");
-    var list = data.events || [];
-    for (var i = 0; i < list.length; i++) prependEvent(list[i]);
-    if (!list.length) eventsEmpty.classList.remove("hidden");
   }
 
   function renderTokens(tokens) {
@@ -219,10 +223,19 @@
     renderTokens(data.tokens || []);
   }
 
-  function stopLive() {
-    if (es) {
-      es.close();
-      es = null;
+  function clearReconnect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function stopLive(clearWant) {
+    if (clearWant) wantLive = false;
+    clearReconnect();
+    if (liveAbort) {
+      liveAbort.abort();
+      liveAbort = null;
     }
     if (statusTimer) {
       clearInterval(statusTimer);
@@ -231,27 +244,100 @@
     setConn("offline");
   }
 
-  function startLive() {
-    stopLive();
-    var url = "/api/v1/events/stream?token=" + encodeURIComponent(token());
-    es = new EventSource(url);
-    es.addEventListener("kunari.event", function (msg) {
-      try {
-        prependEvent(JSON.parse(msg.data));
-      } catch (e) { /* ignore malformed */ }
-    });
-    es.onopen = function () { setConn("live"); };
-    es.onerror = function () { setConn("error"); };
+  function scheduleReconnect() {
+    if (!wantLive || reconnectTimer) return;
+    setConn("error");
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      if (wantLive) startLive();
+    }, RECONNECT_MS);
+  }
+
+  // Parse one or more SSE frames from a text buffer. Returns leftover partial frame.
+  function consumeSSE(buf, onEvent) {
+    var parts = buf.split("\n\n");
+    var rest = parts.pop();
+    for (var i = 0; i < parts.length; i++) {
+      var block = parts[i];
+      if (!block) continue;
+      var lines = block.split("\n");
+      var eventName = "message";
+      var dataLines = [];
+      for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (line.indexOf("event:") === 0) {
+          eventName = line.slice(6).trim();
+        } else if (line.indexOf("data:") === 0) {
+          dataLines.push(line.slice(5).replace(/^ /, ""));
+        }
+        // comments / id lines ignored
+      }
+      if (eventName === "kunari.event" && dataLines.length) {
+        try {
+          onEvent(JSON.parse(dataLines.join("\n")));
+        } catch (e) { /* ignore malformed */ }
+      }
+    }
+    return rest || "";
+  }
+
+  // fetch-stream SSE with Authorization header (never put api.token in the URL).
+  // Server backfills from after_seq then streams live - no separate history pull.
+  async function startLive() {
+    stopLive(false);
+    wantLive = true;
+    if (!token()) {
+      showLogin("Unauthorized - check the API token.");
+      return;
+    }
+
+    var ctrl = new AbortController();
+    liveAbort = ctrl;
+    setConn("offline");
+
     statusTimer = setInterval(function () {
-      refreshStatus().catch(function () { /* surfaced via auth path */ });
+      refreshStatus().catch(function () { /* auth path surfaces logout */ });
     }, 5000);
+
+    try {
+      var res = await fetch("/api/v1/events/stream?after_seq=" + encodeURIComponent(String(lastSeq)), {
+        method: "GET",
+        headers: authHeaders({ Accept: "text/event-stream" }),
+        signal: ctrl.signal,
+        cache: "no-store",
+      });
+      if (res.status === 401) {
+        setToken("");
+        showLogin("Unauthorized - check the API token.");
+        return;
+      }
+      if (!res.ok || !res.body) {
+        scheduleReconnect();
+        return;
+      }
+      setConn("live");
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = "";
+      while (wantLive) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        buf = consumeSSE(buf, prependEvent);
+      }
+      if (wantLive) scheduleReconnect();
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      scheduleReconnect();
+    }
   }
 
   async function connect() {
     showConsole();
     await refreshStatus();
-    await loadEvents();
     await refreshTokens();
+    // Stream first: hub SSE subscribes then backfills, so there is no
+    // history→subscribe gap and the token never appears in the URL.
     startLive();
   }
 
@@ -276,6 +362,7 @@
   document.getElementById("btn-clear-events").addEventListener("click", function () {
     eventsBody.textContent = "";
     seenSeq = Object.create(null);
+    lastSeq = 0;
     eventsEmpty.classList.remove("hidden");
   });
 

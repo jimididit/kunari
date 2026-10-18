@@ -132,7 +132,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 - Beacons are **DNS or HTTPS only**
 - Collection levels: `minimal` \| `standard` (default) \| `forensic` (network fields opt-in)
 - Webhook sinks allow RFC1918 by default (on-prem SIEM); use `DenyPrivate` for cloud-only egress
-- SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible
+- SSE `?token=` may appear in proxy logs - prefer `Authorization: Bearer` when possible (the embedded `/ui/` console uses Bearer via `fetch` streaming, not query tokens)
 
 ## Status
 

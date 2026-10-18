@@ -38,5 +38,5 @@ Fixes are prioritized by severity and exploitability.
 
 - Deploy Kunari only on systems you own or are authorized to monitor.
 - Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts and public repos.
-- SSE `?token=` is for browser `EventSource` clients only; tokens in query strings can appear in reverse-proxy access logs. Prefer `Authorization: Bearer` when the client can set headers.
+- SSE `?token=` is for legacy `EventSource` clients only; tokens in query strings can appear in reverse-proxy access logs. Prefer `Authorization: Bearer` when the client can set headers. The embedded hub `/ui/` console streams SSE with Bearer via `fetch` (no query token).
 - Put the hub behind TLS (reverse proxy). Use `--trusted-proxy` only for terminators you control.
