@@ -17,26 +17,29 @@ import (
 )
 
 type Config struct {
-	HTTPListen string
-	DNSListen  string
-	DNSZone    string
-	DataDir    string
-	RegistryDB string
-	KeyPath    string
-	Collect    collect.Level
-	Logger     *slog.Logger
+	HTTPListen       string
+	DNSListen        string
+	DNSZone          string
+	DataDir          string
+	RegistryDB       string
+	KeyPath          string
+	IngestSecretPath string // default: <data>/ingest.secret
+	Collect          collect.Level
+	Logger           *slog.Logger
 }
 
 type Hub struct {
-	cfg      Config
-	log      *slog.Logger
-	keys     *kcrypto.KeyPair
-	reg      *registry.Store
-	chain    *event.Chain
-	queue    *sink.Queue
-	throttle *sink.Throttle
-	mu       sync.Mutex
-	hits     int
+	cfg          Config
+	log          *slog.Logger
+	keys         *kcrypto.KeyPair
+	reg          *registry.Store
+	chain        *event.Chain
+	queue        *sink.Queue
+	throttle     *sink.Throttle
+	ingestSecret []byte
+	seen         *seenIDs
+	mu           sync.Mutex
+	hits         int
 }
 
 func New(cfg Config) (*Hub, error) {
@@ -76,14 +79,26 @@ func New(cfg Config) (*Hub, error) {
 	if cfg.Collect == "" {
 		cfg.Collect = collect.Standard
 	}
+	secretPath := cfg.IngestSecretPath
+	if secretPath == "" {
+		secretPath = filepath.Join(cfg.DataDir, "ingest.secret")
+	}
+	ingestSecret, err := loadOrCreateIngestSecret(secretPath)
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
+	cfg.Logger.Info("hub ingest enabled", "secret_path", secretPath)
 	return &Hub{
-		cfg:      cfg,
-		log:      cfg.Logger,
-		keys:     keys,
-		reg:      reg,
-		chain:    chain,
-		queue:    q,
-		throttle: sink.NewThrottle(time.Minute),
+		cfg:          cfg,
+		log:          cfg.Logger,
+		keys:         keys,
+		reg:          reg,
+		chain:        chain,
+		queue:        q,
+		throttle:     sink.NewThrottle(time.Minute),
+		ingestSecret: ingestSecret,
+		seen:         newSeenIDs(8192),
 	}, nil
 }
 

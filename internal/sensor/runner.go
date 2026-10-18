@@ -2,14 +2,18 @@ package sensor
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/event"
+	"github.com/jimididit/kunari/internal/safepath"
 	"github.com/jimididit/kunari/internal/sink"
 )
 
@@ -48,7 +52,16 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), log, fileSink, sink.NewStdoutSink())
+	sinks := []sink.Sink{fileSink, sink.NewStdoutSink()}
+	if cfg.HubURL != "" || cfg.HubSecretFile != "" {
+		hubSink, err := newHubPushSink(cfg)
+		if err != nil {
+			return nil, err
+		}
+		sinks = append(sinks, hubSink)
+		log.Info("sentinel hub push enabled", "url", strings.TrimRight(cfg.HubURL, "/")+"/api/v1/ingest")
+	}
+	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), log, sinks...)
 	if err != nil {
 		return nil, err
 	}
@@ -228,4 +241,41 @@ func (r *Runner) emitHeartbeat(ctx context.Context, drift bool) {
 		_ = r.queue.Enqueue(ev)
 	}
 	_ = ctx
+}
+
+func newHubPushSink(cfg *Config) (*sink.WebhookSink, error) {
+	if cfg.HubURL == "" {
+		return nil, fmt.Errorf("hub_secret_file set but hub_url is empty")
+	}
+	if cfg.HubSecretFile == "" {
+		return nil, fmt.Errorf("hub_url set but hub_secret_file is empty")
+	}
+	path, err := safepath.Clean(cfg.HubSecretFile)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
+	if err != nil {
+		return nil, fmt.Errorf("hub_secret_file: %w", err)
+	}
+	secret := trimSecret(raw)
+	if decoded, err := hex.DecodeString(string(secret)); err == nil && len(decoded) >= 16 {
+		secret = decoded
+	}
+	if len(secret) < 16 {
+		return nil, fmt.Errorf("hub_secret_file must contain at least 16 bytes")
+	}
+	base := strings.TrimRight(cfg.HubURL, "/")
+	return sink.NewHubPushSink(base+"/api/v1/ingest", secret)
+}
+
+func trimSecret(b []byte) []byte {
+	i, j := 0, len(b)
+	for i < j && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	for j > i && (b[j-1] == ' ' || b[j-1] == '\t' || b[j-1] == '\n' || b[j-1] == '\r') {
+		j--
+	}
+	return b[i:j]
 }

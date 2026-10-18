@@ -44,14 +44,18 @@ kunari forge --type env --name app-secrets --detect both \
   --collector https://beacon.example.com \
   --memo "lab only" --authz-ref "LAB-001" --out ./dist
 
-# Run a local hub
+# Run a local hub (creates data/ingest.secret for sentinel HMAC push)
 kunari hub --listen :8443 --data ./data
 
-# Watch a deployed path (prints armed tier at startup)
-kunari sentinel init-config --path ./dist/app-secrets.env --token <token_id> --out sentinel.json
+# Watch a deployed path and push alerts to the hub
+kunari sentinel init-config --path ./dist/app-secrets.env --token <token_id> \
+  --hub-url http://127.0.0.1:8443 --hub-secret-file ./data/ingest.secret \
+  --out sentinel.json
 kunari sentinel install-hints --config sentinel.json
 kunari sentinel run --config sentinel.json
 ```
+
+Hub accepts `POST /api/v1/ingest` (HMAC-SHA256, same headers as webhook sinks). Share `ingest.secret` with sentinels; never embed it in forged artifacts.
 
 Lab walkthroughs: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
 

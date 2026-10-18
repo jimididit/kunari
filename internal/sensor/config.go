@@ -13,13 +13,17 @@ import (
 
 // Config is the on-disk sentinel configuration.
 type Config struct {
-	Targets          []Target     `json:"targets"`
-	Allowlist        []AllowEntry `json:"allowlist"`
-	HeartbeatEvery   string       `json:"heartbeat_every"` // duration, default 60s
-	DataDir          string       `json:"data_dir"`
-	KeyPath          string       `json:"key_path"`
-	PreferTier       []string     `json:"prefer_tiers,omitempty"`
-	AgentVersion     string       `json:"agent_version"`
+	Targets        []Target     `json:"targets"`
+	Allowlist      []AllowEntry `json:"allowlist"`
+	HeartbeatEvery string       `json:"heartbeat_every"` // duration, default 60s
+	DataDir        string       `json:"data_dir"`
+	KeyPath        string       `json:"key_path"`
+	PreferTier     []string     `json:"prefer_tiers,omitempty"`
+	AgentVersion   string       `json:"agent_version"`
+	// HubURL is the hub base URL (e.g. https://beacon.example.com). When set
+	// with HubSecretFile, alerts are HMAC-POSTed to {HubURL}/api/v1/ingest.
+	HubURL        string `json:"hub_url,omitempty"`
+	HubSecretFile string `json:"hub_secret_file,omitempty"` // path to shared ingest secret
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -67,12 +71,13 @@ func (c *Config) Hash() string {
 		Targets   []Target     `json:"targets"`
 		Allowlist []AllowEntry `json:"allowlist"`
 		Prefer    []string     `json:"prefer_tiers,omitempty"`
-	}{c.Targets, c.Allowlist, c.PreferTier})
+		HubURL    string       `json:"hub_url,omitempty"`
+	}{c.Targets, c.Allowlist, c.PreferTier, c.HubURL})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
-func WriteExampleConfig(path string, targets []Target) error {
+func WriteExampleConfig(path string, targets []Target, hubURL, hubSecretFile string) error {
 	c := Config{
 		Targets:        targets,
 		Allowlist:      DefaultAllowlist(),
@@ -80,6 +85,8 @@ func WriteExampleConfig(path string, targets []Target) error {
 		DataDir:        "./data-sentinel",
 		KeyPath:        "./data-sentinel/signing.key",
 		AgentVersion:   "0.1.0-dev",
+		HubURL:         hubURL,
+		HubSecretFile:  hubSecretFile,
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
