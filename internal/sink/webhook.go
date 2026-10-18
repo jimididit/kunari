@@ -47,7 +47,9 @@ func NewWebhookSink(rawURL string, secret []byte) (*WebhookSink, error) {
 				return http.ErrUseLastResponse
 			},
 			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
+				// No env proxy: HTTP(S)_PROXY would dial the proxy instead of the
+				// destination, skipping safeDialContext's DNS-rebinding / SSRF checks.
+				Proxy:                 nil,
 				DialContext:           safeDialContext,
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          4,

@@ -27,6 +27,10 @@ func TestWebhookSSRFBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected metadata block")
 	}
+	_, err = sink.NewWebhookSink("http://[::1]:9/hook", secret)
+	if err == nil {
+		t.Fatal("expected IPv6 loopback block")
+	}
 	_, err = sink.NewWebhookSink("https://example.com/hook", []byte("short"))
 	if err == nil {
 		t.Fatal("expected short secret rejection")
