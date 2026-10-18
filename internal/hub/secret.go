@@ -9,10 +9,19 @@ import (
 	"github.com/jimididit/kunari/internal/safepath"
 )
 
-const ingestSecretBytes = 32
+const secretBytes = 32
 
 // loadOrCreateIngestSecret reads a hex-encoded secret from path, or creates one.
 func loadOrCreateIngestSecret(path string) ([]byte, error) {
+	return loadOrCreateSecret(path, "ingest secret")
+}
+
+// loadOrCreateAPIToken loads/creates the operator read API bearer token.
+func loadOrCreateAPIToken(path string) ([]byte, error) {
+	return loadOrCreateSecret(path, "api token")
+}
+
+func loadOrCreateSecret(path, label string) ([]byte, error) {
 	path, err := safepath.Clean(path)
 	if err != nil {
 		return nil, err
@@ -21,7 +30,7 @@ func loadOrCreateIngestSecret(path string) ([]byte, error) {
 	if err == nil {
 		raw := trimSpaceBytes(b)
 		if len(raw) == 0 {
-			return nil, fmt.Errorf("ingest secret file %q is empty", path)
+			return nil, fmt.Errorf("%s file %q is empty", label, path)
 		}
 		// Accept raw bytes or hex encoding.
 		if decoded, err := hex.DecodeString(string(raw)); err == nil && len(decoded) >= 16 {
@@ -30,12 +39,12 @@ func loadOrCreateIngestSecret(path string) ([]byte, error) {
 		if len(raw) >= 16 {
 			return raw, nil
 		}
-		return nil, fmt.Errorf("ingest secret must be at least 16 bytes")
+		return nil, fmt.Errorf("%s must be at least 16 bytes", label)
 	}
 	if !os.IsNotExist(err) {
 		return nil, err
 	}
-	buf := make([]byte, ingestSecretBytes)
+	buf := make([]byte, secretBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, err
 	}

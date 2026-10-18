@@ -17,13 +17,15 @@ func (h *Hub) routes() http.Handler {
 			"ok":     true,
 			"hits":   h.Hits(),
 			"ingest": len(h.ingestSecret) > 0,
+			"api":    len(h.apiToken) > 0,
 			"ts":     time.Now().UTC(),
 		})
 	})
 	mux.HandleFunc("GET /b/{token}", h.handleBeacon)
 	mux.HandleFunc("HEAD /b/{token}", h.handleBeacon)
 	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
-	mux.HandleFunc("GET /api/v1/events", h.handleListEventsStub)
+	mux.HandleFunc("GET /api/v1/events", h.requireAPIAuth(false, h.handleListEvents))
+	mux.HandleFunc("GET /api/v1/events/stream", h.requireAPIAuth(true, h.handleEventStream))
 	return mux
 }
 
@@ -59,14 +61,6 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 		0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0xff, 0xff,
 		0x00, 0x00, 0x00, 0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
 		0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b,
-	})
-}
-
-func (h *Hub) handleListEventsStub(w http.ResponseWriter, r *http.Request) {
-	// Authenticated pull API arrives with Phase 1 hardening; stub for now.
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"status": "auth pull API: use local events.jsonl / kunari verify for v0.1 lab",
 	})
 }
 
