@@ -15,13 +15,15 @@ import (
 
 func newHubCmd() *cobra.Command {
 	var (
-		listen       string
-		dnsListen    string
-		dnsZone      string
-		dataDir      string
-		keyPath      string
-		ingestSecret string
-		collectLvl   string
+		listen         string
+		dnsListen      string
+		dnsZone        string
+		dataDir        string
+		keyPath        string
+		ingestSecret   string
+		collectLvl     string
+		trustedProxies []string
+		clientIPHeader string
 	)
 	cmd := &cobra.Command{
 		Use:   "hub",
@@ -43,6 +45,8 @@ func newHubCmd() *cobra.Command {
 				RegistryDB:       filepath.Join(dataDir, "registry.db"),
 				KeyPath:          keyPath,
 				IngestSecretPath: ingestSecret,
+				TrustedProxies:   trustedProxies,
+				ClientIPHeader:   clientIPHeader,
 				Collect:          lvl,
 			})
 			if err != nil {
@@ -62,6 +66,8 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dataDir, "data", "./data", "data directory")
 	cmd.Flags().StringVar(&keyPath, "key", "", "signing key path (default: <data>/signing.key)")
 	cmd.Flags().StringVar(&ingestSecret, "ingest-secret", "", "HMAC ingest secret path (default: <data>/ingest.secret)")
+	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil, "CIDR/IP of reverse proxies allowed to set client-IP header (repeatable); empty = trust RemoteAddr only")
+	cmd.Flags().StringVar(&clientIPHeader, "client-ip-header", "X-Forwarded-For", "header used when peer matches --trusted-proxy")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if keyPath == "" {

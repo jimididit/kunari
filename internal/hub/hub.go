@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,22 +25,27 @@ type Config struct {
 	RegistryDB       string
 	KeyPath          string
 	IngestSecretPath string // default: <data>/ingest.secret
-	Collect          collect.Level
-	Logger           *slog.Logger
+	// TrustedProxies are CIDRs (or bare IPs) allowed to set ClientIPHeader.
+	// Empty (default): always use RemoteAddr; never trust X-Forwarded-For.
+	TrustedProxies []string
+	ClientIPHeader string // default X-Forwarded-For when TrustedProxies is set
+	Collect        collect.Level
+	Logger         *slog.Logger
 }
 
 type Hub struct {
-	cfg          Config
-	log          *slog.Logger
-	keys         *kcrypto.KeyPair
-	reg          *registry.Store
-	chain        *event.Chain
-	queue        *sink.Queue
-	throttle     *sink.Throttle
-	ingestSecret []byte
-	seen         *seenIDs
-	mu           sync.Mutex
-	hits         int
+	cfg            Config
+	log            *slog.Logger
+	keys           *kcrypto.KeyPair
+	reg            *registry.Store
+	chain          *event.Chain
+	queue          *sink.Queue
+	throttle       *sink.Throttle
+	ingestSecret   []byte
+	seen           *seenIDs
+	trustedProxies []*net.IPNet
+	mu             sync.Mutex
+	hits           int
 }
 
 func New(cfg Config) (*Hub, error) {
@@ -89,16 +95,29 @@ func New(cfg Config) (*Hub, error) {
 		return nil, err
 	}
 	cfg.Logger.Info("hub ingest enabled", "secret_path", secretPath)
+	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
+	if len(trusted) > 0 {
+		hdr := cfg.ClientIPHeader
+		if hdr == "" {
+			hdr = "X-Forwarded-For"
+		}
+		cfg.Logger.Info("hub trusted-proxy client IP enabled", "proxies", len(trusted), "header", hdr)
+	}
 	return &Hub{
-		cfg:          cfg,
-		log:          cfg.Logger,
-		keys:         keys,
-		reg:          reg,
-		chain:        chain,
-		queue:        q,
-		throttle:     sink.NewThrottle(time.Minute),
-		ingestSecret: ingestSecret,
-		seen:         newSeenIDs(8192),
+		cfg:            cfg,
+		log:            cfg.Logger,
+		keys:           keys,
+		reg:            reg,
+		chain:          chain,
+		queue:          q,
+		throttle:       sink.NewThrottle(time.Minute),
+		ingestSecret:   ingestSecret,
+		seen:           newSeenIDs(8192),
+		trustedProxies: trusted,
 	}, nil
 }
 

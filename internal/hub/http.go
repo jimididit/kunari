@@ -2,7 +2,6 @@ package hub
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -36,7 +35,7 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	netInfo := &event.Network{
-		SrcIP: clientIP(r),
+		SrcIP: h.clientIP(r),
 		UA:    r.UserAgent(),
 	}
 	if h.cfg.Collect.AllowsForensicNetwork() {
@@ -71,13 +70,3 @@ func (h *Hub) handleListEventsStub(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func clientIP(r *http.Request) string {
-	// Do not trust X-Forwarded-For by default: clients can spoof it without a
-	// trusted reverse-proxy hop. Operators terminating TLS should log RemoteAddr
-	// at the proxy and pass real client IP via a controlled header later.
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}

@@ -35,6 +35,19 @@ func TestWebhookSSRFBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected short secret rejection")
 	}
+	// Default allows RFC1918 for on-prem SIEM.
+	if _, err := sink.NewWebhookSink("http://10.0.0.5/hook", secret); err != nil {
+		t.Fatalf("RFC1918 should be allowed by default: %v", err)
+	}
+	// DenyPrivate blocks RFC1918 literals at construction.
+	_, err = sink.NewWebhookSinkOpts("http://10.0.0.5/hook", secret, sink.WebhookOptions{DenyPrivate: true})
+	if err == nil {
+		t.Fatal("expected DenyPrivate to block RFC1918")
+	}
+	_, err = sink.NewWebhookSinkOpts("http://192.168.1.1/hook", secret, sink.WebhookOptions{DenyPrivate: true})
+	if err == nil {
+		t.Fatal("expected DenyPrivate to block 192.168/16")
+	}
 }
 
 func TestWebhookHMAC(t *testing.T) {
