@@ -53,7 +53,7 @@ Kunari is a **defensive tripwire**, not a stealth agent. A local attacker who ca
 
 **Do:**
 
-- Keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). `kunari sentinel run` attempts to tighten Unix modes on start.
+- Keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). `kunari sentinel run` chmod`s config/secret files to `0600` when needed and refuses to start if `data_dir` is group/other-accessible.
 - Run under a dedicated low-privilege service account (`kunari sentinel install-hints` sketches this).
 - Prefer forge `--detect both` so HTTPS/DNS beacons still fire if the sentinel is stopped.
 - Place decoys among believable paths; do not put the only copy of real secrets in a canary.
