@@ -47,6 +47,10 @@ kunari forge --type env --name app-secrets --detect both \
 # Run a local hub (creates data/ingest.secret for sentinel HMAC push)
 kunari hub --listen :8443 --data ./data
 
+# Behind Caddy/nginx: only trust the terminator for client IP
+kunari hub --listen 127.0.0.1:8080 --data ./data \
+  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+
 # Watch a deployed path and push alerts to the hub
 kunari sentinel init-config --path ./dist/app-secrets.env --token <token_id> \
   --hub-url http://127.0.0.1:8443 --hub-secret-file ./data/ingest.secret \
@@ -55,7 +59,7 @@ kunari sentinel install-hints --config sentinel.json
 kunari sentinel run --config sentinel.json
 ```
 
-Hub accepts `POST /api/v1/ingest` (HMAC-SHA256, same headers as webhook sinks). Share `ingest.secret` with sentinels; never embed it in forged artifacts.
+Hub accepts `POST /api/v1/ingest` (HMAC-SHA256, same headers as webhook sinks). Share `ingest.secret` with sentinels; never embed it in forged artifacts. Webhook sinks allow RFC1918 by default (on-prem SIEM); use `sink.WebhookOptions{DenyPrivate: true}` for cloud-only egress.
 
 Lab walkthroughs: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
 

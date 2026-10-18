@@ -28,11 +28,23 @@ type WebhookSink struct {
 	client *http.Client
 }
 
+// WebhookOptions tunes SSRF egress policy for SIEM / alert webhooks.
+type WebhookOptions struct {
+	// DenyPrivate blocks RFC1918, RFC4193 ULA, and other net.IP.IsPrivate()
+	// destinations in addition to loopback/link-local. Use for cloud-only sinks
+	// that must never reach on-prem addresses.
+	DenyPrivate bool
+}
+
 func NewWebhookSink(rawURL string, secret []byte) (*WebhookSink, error) {
+	return NewWebhookSinkOpts(rawURL, secret, WebhookOptions{})
+}
+
+func NewWebhookSinkOpts(rawURL string, secret []byte, opts WebhookOptions) (*WebhookSink, error) {
 	if len(secret) < minSecretLen {
 		return nil, fmt.Errorf("webhook secret must be at least %d bytes", minSecretLen)
 	}
-	if err := validateWebhookURL(rawURL); err != nil {
+	if err := validateWebhookURL(rawURL, opts.DenyPrivate); err != nil {
 		return nil, err
 	}
 	return &WebhookSink{
@@ -47,7 +59,7 @@ func NewWebhookSink(rawURL string, secret []byte) (*WebhookSink, error) {
 				// No env proxy: HTTP(S)_PROXY would dial the proxy instead of the
 				// destination, skipping safeDialContext's DNS-rebinding / SSRF checks.
 				Proxy:                 nil,
-				DialContext:           safeDialContext,
+				DialContext:           makeSafeDial(opts.DenyPrivate),
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          4,
 				IdleConnTimeout:       30 * time.Second,
@@ -89,7 +101,7 @@ func (w *WebhookSink) Deliver(ctx context.Context, ev *event.Event) error {
 	return nil
 }
 
-func validateWebhookURL(raw string) error {
+func validateWebhookURL(raw string, denyPrivate bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return err
@@ -101,13 +113,13 @@ func validateWebhookURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("webhook host required")
 	}
-	if isBlockedHostLiteral(host) {
-		return fmt.Errorf("webhook host %q blocked (loopback/link-local/metadata)", host)
+	if isBlockedHostLiteral(host, denyPrivate) {
+		return fmt.Errorf("webhook host %q blocked (loopback/link-local/metadata/private)", host)
 	}
 	return nil
 }
 
-func isBlockedHostLiteral(host string) bool {
+func isBlockedHostLiteral(host string, denyPrivate bool) bool {
 	h := normalizeHost(host)
 	if h == "localhost" || h == "metadata.google.internal" ||
 		strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".metadata.google.internal") {
@@ -117,27 +129,39 @@ func isBlockedHostLiteral(host string) bool {
 	if ip == nil {
 		return false
 	}
-	return isBlockedIP(ip)
+	return isBlockedIP(ip, denyPrivate)
 }
 
-func isBlockedIP(ip net.IP) bool {
+func isBlockedIP(ip net.IP, denyPrivate bool) bool {
 	if ip == nil {
 		return true
 	}
-	// Loopback/link-local/metadata/multicast. RFC1918 remains allowed for on-prem SIEM.
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified()
+	// Loopback/link-local/metadata/multicast. RFC1918 allowed unless DenyPrivate.
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	if denyPrivate && ip.IsPrivate() {
+		return true
+	}
+	return false
+}
+
+func makeSafeDial(denyPrivate bool) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return safeDialContext(ctx, network, addr, denyPrivate)
+	}
 }
 
 // safeDialContext resolves the host and refuses destinations that land on blocked IPs
 // (DNS rebinding / metadata SSRF). Only dials a non-blocked address.
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+func safeDialContext(ctx context.Context, network, addr string, denyPrivate bool) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
 	host = normalizeHost(host)
-	if isBlockedHostLiteral(host) {
+	if isBlockedHostLiteral(host, denyPrivate) {
 		return nil, fmt.Errorf("webhook host %q blocked", host)
 	}
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -147,7 +171,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	var last error
 	d := &net.Dialer{Timeout: 10 * time.Second}
 	for _, ipa := range ips {
-		if isBlockedIP(ipa.IP) {
+		if isBlockedIP(ipa.IP, denyPrivate) {
 			last = fmt.Errorf("webhook resolved to blocked address %s", ipa.IP)
 			continue
 		}
@@ -190,7 +214,7 @@ func newWebhook(rawURL string, secret []byte, allowPrivate bool) (*WebhookSink, 
 	}
 	host := normalizeHost(u.Hostname())
 	if !allowPrivate {
-		if err := validateWebhookURL(rawURL); err != nil {
+		if err := validateWebhookURL(rawURL, false); err != nil {
 			return nil, err
 		}
 	} else if isMetadataHost(host) {
@@ -209,7 +233,7 @@ func newWebhook(rawURL string, secret []byte, allowPrivate bool) (*WebhookSink, 
 		// even when the URL hostname is a DNS name that resolves there.
 		transport.DialContext = hubDialContext
 	} else {
-		transport.DialContext = safeDialContext
+		transport.DialContext = makeSafeDial(false)
 	}
 	return &WebhookSink{
 		url:    rawURL,
