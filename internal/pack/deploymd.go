@@ -24,6 +24,10 @@ Protect this bundle in transit; it contains hub ingest material.
 3. Run the platform install script as a privileged operator (on Unix: chmod u+x install.sh if needed).
 4. Confirm hub reachability and touch the decoy in a lab first.
 
+Notes:
+- Linux: install under /opt (not /home); the systemd unit runs as user kunari.
+- Windows: install.ps1 registers a SYSTEM scheduled task (ONSTART). kunari.exe is not a Windows Service binary, so sc.exe create will time out.
+
 This is an agent deploy (sentinel process on the endpoint). It is not beacon-only.
 `, goos, decoyBase, prefix, binName, prefix)
 }

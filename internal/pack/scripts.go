@@ -23,6 +23,12 @@ if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret
   echo "error: etc/ingest.secret missing or still a placeholder" >&2
   exit 1
 fi
+case "$PREFIX" in
+  /home|/home/*|/root|/root/*)
+    echo "error: PREFIX=$PREFIX is under a home directory; the kunari service user cannot traverse typical 0700 homes. Use /opt/kunari-agent" >&2
+    exit 1
+    ;;
+esac
 id -u kunari >/dev/null 2>&1 || useradd --system --home "$PREFIX" --shell /usr/sbin/nologin kunari
 install -d -m 0700 -o kunari -g kunari "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" "$PREFIX/data" "$PREFIX/bin"
 install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
@@ -121,10 +127,14 @@ func darwinPlist(prefix, binName string) string {
 func windowsInstall(prefix, binName string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
+# kunari.exe is not a Windows Service binary; install uses a SYSTEM scheduled task.
+# Prefer ScheduledTasks cmdlets over schtasks.exe to avoid native stderr/quote pitfalls under $ErrorActionPreference=Stop.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
 $BinName = '%s'
+$TaskName = 'KunariSentinel'
+$ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
   throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
@@ -135,13 +145,18 @@ if ($secText -match '^\s*#' -or [string]::IsNullOrWhiteSpace($secText)) {
   throw 'etc\ingest.secret missing or still a placeholder'
 }
 
-# Stop existing service before replacing binaries.
+# Stop prior lab installs (legacy sc.exe service and/or scheduled task) before replacing binaries.
 $svc = Get-Service -Name KunariSentinel -ErrorAction SilentlyContinue
 if ($svc) {
   Stop-Service KunariSentinel -Force -ErrorAction SilentlyContinue
-  sc.exe delete KunariSentinel | Out-Null
+  $null = cmd.exe /c 'sc.exe delete KunariSentinel >nul 2>&1'
   Start-Sleep -Seconds 1
 }
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'), (Join-Path $Prefix 'etc'), (Join-Path $Prefix 'data'), (Join-Path $Prefix 'bin') | Out-Null
 Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix ('bin\' + $BinName)) -Force
@@ -150,18 +165,24 @@ Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secre
 Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
 
 # Restrict package tree to local Administrators + SYSTEM.
-icacls $Prefix /inheritance:r | Out-Null
-icacls $Prefix /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+$null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Prefix)
+$null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Prefix)
 $IngestDst = Join-Path $Prefix 'etc\ingest.secret'
-icacls $IngestDst /inheritance:r | Out-Null
-icacls $IngestDst /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+$null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $IngestDst)
+$null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" >nul' -f $IngestDst)
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
 $Cfg = Join-Path $Prefix 'etc\sentinel.json'
-$BinPath = '"' + $Bin + '" sentinel run --config "' + $Cfg + '"'
-sc.exe create KunariSentinel binPath= $BinPath start= auto | Out-Null
-sc.exe description KunariSentinel "Kunari defensive tripwire sensor" | Out-Null
-Start-Service KunariSentinel
-Write-Host "installed under $Prefix; service KunariSentinel started"
+$action = New-ScheduledTaskAction -Execute $Bin -Argument ('sentinel run --config "{0}"' -f $Cfg)
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Start-Sleep -Seconds 2
+if (-not (Get-Process -Name $ProcName -ErrorAction SilentlyContinue)) {
+  throw ("scheduled task {0} was created but process {1} is not running; check Task Scheduler history" -f $TaskName, $ProcName)
+}
+Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, AtStartup)"
 `, p, binName)
 }
