@@ -171,14 +171,20 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(ps1)
-	if !strings.Contains(body, "schtasks.exe /Create") {
-		t.Fatal("windows install should use schtasks (kunari.exe is not a Windows Service)")
+	if !strings.Contains(body, "Register-ScheduledTask") {
+		t.Fatal("windows install should use Register-ScheduledTask (kunari.exe is not a Windows Service)")
 	}
 	if strings.Contains(body, "sc.exe create") || strings.Contains(body, "Start-Service KunariSentinel") {
 		t.Fatal("windows install must not register kunari.exe as an sc.exe service")
 	}
-	if idxStop, idxCopy := strings.Index(body, "schtasks.exe /End"), strings.Index(body, "Copy-Item -LiteralPath $BinSrc"); idxStop < 0 || idxCopy < 0 || idxStop > idxCopy {
-		t.Fatal("stop prior task must happen before binary copy")
+	if strings.Contains(body, "2>$null") {
+		t.Fatal("windows install must not use native 2>$null under ErrorActionPreference=Stop")
+	}
+	if !strings.Contains(body, "GetFileNameWithoutExtension($BinName)") {
+		t.Fatal("windows install should derive process name from $BinName")
+	}
+	if idxStop, idxCopy := strings.Index(body, "Unregister-ScheduledTask"), strings.Index(body, "Copy-Item -LiteralPath $BinSrc"); idxStop < 0 || idxCopy < 0 || idxStop > idxCopy {
+		t.Fatal("unregister prior task must happen before binary copy")
 	}
 	if !strings.Contains(body, "icacls") {
 		t.Fatal("windows install should set ACLs")

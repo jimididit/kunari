@@ -128,11 +128,13 @@ func windowsInstall(prefix, binName string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
 # kunari.exe is not a Windows Service binary; install uses a SYSTEM scheduled task.
+# Prefer ScheduledTasks cmdlets over schtasks.exe to avoid native stderr/quote pitfalls under $ErrorActionPreference=Stop.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
 $BinName = '%s'
 $TaskName = 'KunariSentinel'
+$ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
   throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
@@ -147,12 +149,14 @@ if ($secText -match '^\s*#' -or [string]::IsNullOrWhiteSpace($secText)) {
 $svc = Get-Service -Name KunariSentinel -ErrorAction SilentlyContinue
 if ($svc) {
   Stop-Service KunariSentinel -Force -ErrorAction SilentlyContinue
-  sc.exe delete KunariSentinel | Out-Null
+  $null = cmd.exe /c 'sc.exe delete KunariSentinel >nul 2>&1'
   Start-Sleep -Seconds 1
 }
-schtasks.exe /End /TN $TaskName 2>$null | Out-Null
-Get-Process -Name 'kunari' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'), (Join-Path $Prefix 'etc'), (Join-Path $Prefix 'data'), (Join-Path $Prefix 'bin') | Out-Null
 Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix ('bin\' + $BinName)) -Force
@@ -161,28 +165,24 @@ Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secre
 Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
 
 # Restrict package tree to local Administrators + SYSTEM.
-icacls $Prefix /inheritance:r | Out-Null
-icacls $Prefix /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+$null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Prefix)
+$null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Prefix)
 $IngestDst = Join-Path $Prefix 'etc\ingest.secret'
-icacls $IngestDst /inheritance:r | Out-Null
-icacls $IngestDst /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+$null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $IngestDst)
+$null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" >nul' -f $IngestDst)
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
 $Cfg = Join-Path $Prefix 'etc\sentinel.json'
-# Console app via SYSTEM ONSTART task (kunari.exe is not a Windows Service).
-$Tr = '"{0}" sentinel run --config "{1}"' -f $Bin, $Cfg
-$create = & schtasks.exe /Create /TN $TaskName /TR $Tr /SC ONSTART /RU SYSTEM /RL HIGHEST /F
-if ($LASTEXITCODE -ne 0) {
-  throw ("schtasks create failed: {0}" -f ($create -join ' '))
-}
-$run = & schtasks.exe /Run /TN $TaskName
-if ($LASTEXITCODE -ne 0) {
-  throw ("schtasks run failed: {0}" -f ($run -join ' '))
-}
+$action = New-ScheduledTaskAction -Execute $Bin -Argument ('sentinel run --config "{0}"' -f $Cfg)
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 2
-if (-not (Get-Process -Name 'kunari' -ErrorAction SilentlyContinue)) {
-  throw 'KunariSentinel task was created but kunari.exe is not running; check Task Scheduler history'
+if (-not (Get-Process -Name $ProcName -ErrorAction SilentlyContinue)) {
+  throw ("scheduled task {0} was created but process {1} is not running; check Task Scheduler history" -f $TaskName, $ProcName)
 }
-Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, ONSTART)"
+Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, AtStartup)"
 `, p, binName)
 }
