@@ -25,6 +25,10 @@ type tokenView struct {
 
 func (h *Hub) handleOperatorStatus(w http.ResponseWriter, r *http.Request) {
 	qs := h.queue.Stats()
+	agents := h.agents.Snapshot()
+	if agents == nil {
+		agents = []agentView{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":       true,
@@ -33,6 +37,7 @@ func (h *Hub) handleOperatorStatus(w http.ResponseWriter, r *http.Request) {
 		"ingest":   len(h.ingestSecret) > 0,
 		"api":      len(h.apiToken) > 0,
 		"queue":    qs,
+		"agents":   agents,
 		"ts":       time.Now().UTC(),
 	})
 }

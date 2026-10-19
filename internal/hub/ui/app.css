@@ -91,6 +91,15 @@ html, body {
   color: var(--ink-soft);
 }
 
+.lede.tight {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+}
+
+.agents-panel {
+  margin-bottom: 1rem;
+}
+
 label {
   display: block;
   margin-bottom: 0.35rem;

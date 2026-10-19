@@ -36,8 +36,32 @@
         <div class="stat"><span class="label">hits</span><span id="stat-hits" class="value">-</span></div>
         <div class="stat"><span class="label">last seq</span><span id="stat-seq" class="value">-</span></div>
         <div class="stat"><span class="label">queue</span><span id="stat-queue" class="value">-</span></div>
+        <div class="stat"><span class="label">agents</span><span id="stat-agents" class="value">-</span></div>
         <div class="stat wide"><span class="label">sinks</span><span id="stat-sinks" class="value mono">-</span></div>
       </div>
+
+      <section class="panel agents-panel">
+        <div class="panel-head">
+          <h2>Sentinel agents</h2>
+          <p class="lede tight">Last heartbeat from each agent. Missing means no heartbeat within the hub <code>--agent-stale-after</code> window.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>host</th>
+                <th>status</th>
+                <th>os</th>
+                <th>tier</th>
+                <th>last seen</th>
+                <th>agent id</th>
+              </tr>
+            </thead>
+            <tbody id="agents-body"></tbody>
+          </table>
+        </div>
+        <p id="agents-empty" class="empty">No heartbeating agents yet (configure sentinel <code>hub_url</code>).</p>
+      </section>
 
       <div class="grid">
         <section class="panel">

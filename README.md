@@ -114,8 +114,8 @@ Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Ne
 | `GET /` → `/ui/` | none | Operator console (API token entered in-browser; sessionStorage only) |
 | `GET /healthz` | none | Liveness + hit counters |
 | `GET\|HEAD /b/{token}` | none | HTTPS beacon |
-| `POST /api/v1/ingest` | HMAC (`X-Kunari-*`) | Sentinel event push |
-| `GET /api/v1/status` | Bearer / `X-Kunari-API-Key` | Hits, last seq, queue depth, sink names |
+| `POST /api/v1/ingest` | HMAC (`X-Kunari-*`) | Sentinel events + heartbeats; hub may emit `agent_missing` when an agent goes silent |
+| `GET /api/v1/status` | Bearer / `X-Kunari-API-Key` | Hits, last seq, queue, agents (last-seen / missing) |
 | `GET /api/v1/events` | Bearer / `X-Kunari-API-Key` | Paginated pull (`after_seq`, `limit`) |
 | `GET /api/v1/events/stream` | Bearer or `?token=` | Live SSE |
 | `GET /api/v1/tokens` | Bearer / `X-Kunari-API-Key` | Registry inventory (no signatures) |
