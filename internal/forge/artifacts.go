@@ -13,7 +13,7 @@ type Artifact struct {
 	Content  []byte
 }
 
-func buildArtifact(itemType, name, theme, httpsURL, dnsName string) (*Artifact, error) {
+func buildArtifact(itemType, name, theme, httpsURL, dnsName string, platforms []string) (*Artifact, error) {
 	switch itemType {
 	case "env":
 		return buildEnv(name, theme, httpsURL, dnsName)
@@ -27,8 +27,12 @@ func buildArtifact(itemType, name, theme, httpsURL, dnsName string) (*Artifact, 
 		return buildXLSX(name, theme, httpsURL)
 	case "pdf":
 		return buildPDF(name, theme, httpsURL, dnsName)
+	case "folder":
+		return buildFolder(name, theme, httpsURL, dnsName)
+	case "stub-exe":
+		return buildStubExe(name, httpsURL, platforms)
 	default:
-		return nil, fmt.Errorf("unsupported type %q (phase1: env|svg|html|docx|xlsx|pdf)", itemType)
+		return nil, fmt.Errorf("unsupported type %q (env|svg|html|docx|xlsx|pdf|folder|stub-exe)", itemType)
 	}
 }
 

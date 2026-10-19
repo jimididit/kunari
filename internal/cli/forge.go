@@ -81,7 +81,7 @@ func newForgeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&platform, "platform", "all", "windows,linux,macos or all")
-	cmd.Flags().StringVar(&itemType, "type", "", "env|svg|html|docx|xlsx|pdf")
+	cmd.Flags().StringVar(&itemType, "type", "", "env|svg|html|docx|xlsx|pdf|folder|stub-exe")
 	cmd.Flags().StringVar(&name, "name", "", "artifact base name")
 	cmd.Flags().StringVar(&theme, "theme", "devops", "finance|it-admin|hr|devops")
 	cmd.Flags().StringVar(&detect, "detect", "both", "beacon|sentinel|both")

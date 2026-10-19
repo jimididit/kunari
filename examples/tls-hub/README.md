@@ -82,6 +82,8 @@ Use the public HTTPS origin (not the loopback listen address). Place only the fo
 | `svg` / `html` | required | not embedded | zero-size image / 1x1 img |
 | `docx` / `xlsx` | required | not embedded | OOXML external image relationship |
 | `pdf` | optional if DNS set | optional if HTTPS set | link annotation; DNS-only uses `https://<name>/` |
+| `folder` | optional if DNS set | optional if HTTPS set | zip of decoy dir + `secrets.env`; no UNC `desktop.ini` (use sentinel) |
+| `stub-exe` | required | not used | zip of harmless per-OS stubs that GET the beacon once (needs Go on the forge host) |
 
 Env (secrets-looking lure):
 
@@ -107,6 +109,24 @@ PDF link annotation:
 kunari forge --type pdf --name vendor-invoice --detect beacon \
   --collector https://beacon.example.com \
   --memo "authorized lab" --authz-ref "LAB-BEACON-003" \
+  --out ./dist --key ./data/signing.key --registry ./data/registry.db
+```
+
+Folder decoy (extract + sentinel; optional inner beacon file):
+
+```bash
+kunari forge --type folder --name hr-archive --detect both \
+  --collector https://beacon.example.com \
+  --memo "authorized lab" --authz-ref "LAB-BEACON-004" \
+  --out ./dist --key ./data/signing.key --registry ./data/registry.db
+```
+
+Harmless stub binaries (forge host needs Go; zip contains per-OS stubs):
+
+```bash
+kunari forge --type stub-exe --name healthcheck --detect beacon \
+  --platform windows,linux --collector https://beacon.example.com \
+  --memo "authorized lab" --authz-ref "LAB-BEACON-005" \
   --out ./dist --key ./data/signing.key --registry ./data/registry.db
 ```
 
