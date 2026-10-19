@@ -187,6 +187,12 @@ func (r *Runner) handleTouch(ctx context.Context, t Touch) {
 	matched, reason := MatchAllowlist(exe, r.Cfg.Allowlist)
 	ev := event.New(tokenID, "sentinel", string(r.Watcher.Tier()), t.Action)
 	ev.Memo = memo
+	if t.Extra != nil && t.Extra["access_mask"] != "" {
+		if ev.Memo != "" {
+			ev.Memo += " "
+		}
+		ev.Memo += "mask=" + t.Extra["access_mask"]
+	}
 	ev.ObservedAt = t.Occurred
 	if !t.Proven {
 		ev.Confidence.Action = "inferred"
