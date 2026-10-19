@@ -75,7 +75,9 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 }
 
 func queryRecent4663() (string, error) {
-	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:50", "/f:text")
+	// Larger window: machine-wide File System success auditing floods 4663; /c:50
+	// can drop the decoy's ReadData/WriteData events behind unrelated noise.
+	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:200", "/f:text")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, truncate(string(out), 200))
@@ -143,20 +145,25 @@ func mapAccessMask(mask string) string {
 		return "open"
 	}
 	// Bit tests, not substrings: SYNCHRONIZE is 0x100000 and must not match DELETE 0x10000.
+	// 4663 may report either specific FILE_* rights or unmapped GENERIC_* high bits.
 	const (
 		fileReadData  = 0x1
 		fileWriteData = 0x2
 		fileAppend    = 0x4
 		deleteAccess  = 0x10000
+		genericAll    = 0x10000000
+		genericWrite  = 0x40000000
+		genericRead   = 0x80000000
 	)
 	switch {
 	case v&deleteAccess != 0:
 		return "delete"
-	case v&fileWriteData != 0 || v&fileAppend != 0:
+	case v&fileWriteData != 0 || v&fileAppend != 0 || v&genericWrite != 0 || v&genericAll != 0:
 		return "modify"
-	case v&fileReadData != 0:
+	case v&fileReadData != 0 || v&genericRead != 0:
 		return "read"
 	default:
+		// FILE_READ_ATTRIBUTES (0x80) and similar probes stay "open".
 		return "open"
 	}
 }
