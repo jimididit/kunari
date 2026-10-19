@@ -26,7 +26,7 @@ mkdir -p dist data
 ```
 
 Hub writes `./data/hub/ingest.secret` (hex, mode 0600) for sentinel HMAC push.
-Point a reverse proxy with TLS at the hub for realistic HTTPS beacons, or use DNS collector separately.
+For realistic off-host HTTPS beacons (beacon-max), put Caddy or nginx in front and forge with that hostname - see [../tls-hub](../tls-hub/README.md). DNS collector is separate.
 
 ## 4. Sentinel against the forged file (local + hub push)
 

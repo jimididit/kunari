@@ -1,0 +1,43 @@
+# Kunari hub TLS terminator (Caddy) - public beacon surface only.
+# Replace beacon.example.com with your hostname. Authorized use only.
+#
+# Hub must listen on 127.0.0.1:8080 with:
+#   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+#
+# Public paths: /b/*, /healthz, POST /api/v1/ingest
+# Operator /ui/ and pull/SSE APIs stay on loopback (SSH tunnel) unless you
+# uncomment the @ops block below.
+
+beacon.example.com {
+	encode gzip
+
+	# Overwrite X-Forwarded-For with the connecting client (do not append a
+	# client-supplied chain; the hub trusts this proxy and takes the leftmost IP).
+	@public {
+		path /b/* /healthz
+		path /api/v1/ingest
+	}
+	handle @public {
+		reverse_proxy 127.0.0.1:8080 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	# Optional: expose operator UI + APIs only from your management networks.
+	# @ops remote_ip 10.0.0.0/8 192.168.0.0/16 172.16.0.0/12
+	# handle @ops {
+	# 	reverse_proxy 127.0.0.1:8080 {
+	# 		header_up Host {host}
+	# 		header_up X-Forwarded-For {remote_host}
+	# 		header_up X-Forwarded-Proto {scheme}
+	# 		header_up X-Forwarded-Host {host}
+	# 	}
+	# }
+
+	handle {
+		respond "Not found" 404
+	}
+}
