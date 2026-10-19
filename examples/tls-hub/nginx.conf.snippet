@@ -1,8 +1,18 @@
-# Kunari hub TLS terminator (nginx site snippet).
-# Replace paths, server_name, and certificate paths. Authorized use only.
+# Kunari hub TLS terminator (nginx site snippet) - public beacon surface only.
+# File: examples/tls-hub/nginx.conf.snippet
+# Replace server_name and certificate paths. Authorized use only.
 #
 # Hub must listen on 127.0.0.1:8080 with:
 #   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+#
+# Public: /b/, /healthz, POST /api/v1/ingest
+# Operator /ui/ and pull/SSE APIs: keep on loopback (SSH tunnel) or add an
+# allowlisted server{} / geo block yourself.
+
+upstream kunari_hub {
+    server 127.0.0.1:8080;
+    keepalive 8;
+}
 
 server {
     listen 443 ssl http2;
@@ -14,15 +24,29 @@ server {
     # Optional: HSTS after you confirm HTTPS works end-to-end.
     # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
+    # Overwrite X-Forwarded-For with the TCP peer. Do not use
+    # $proxy_add_x_forwarded_for here: the hub trusts this proxy and takes the
+    # leftmost XFF value, so a client-supplied header would otherwise win.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_http_version 1.1;
+
+    location /b/ {
+        proxy_pass http://kunari_hub;
+    }
+
+    location = /healthz {
+        proxy_pass http://kunari_hub;
+    }
+
+    location = /api/v1/ingest {
+        limit_except POST { deny all; }
+        proxy_pass http://kunari_hub;
+    }
+
     location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        # SSE / long-lived operator streams
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
+        return 404;
     }
 }

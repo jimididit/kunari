@@ -11,13 +11,35 @@ This does **not** add filesystem watching. Beacons fire only when something fetc
 ```text
 Internet / LAN clients
         |  HTTPS :443
-   Caddy or nginx (TLS + optional HSTS)
-        |  HTTP 127.0.0.1:8080
+   Caddy or nginx (TLS)
+        |  only /b/*, /healthz, POST /api/v1/ingest
+        v
    kunari hub --listen 127.0.0.1:8080 --data ./data \
      --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+
+Operator UI / pull API
+        |  SSH tunnel or VPN to 127.0.0.1:8080 (not on the public vhost)
 ```
 
 Use `--trusted-proxy` only for the terminator you control. Without it, the hub ignores `X-Forwarded-For` and records the proxy as the client IP.
+
+## Public surface vs operator surface
+
+The example configs **do not** publish `/ui/` or the Bearer-protected operator APIs (`/api/v1/events`, `/status`, `/tokens`, …) on the public hostname. Those stay on loopback.
+
+| Path | Public HTTPS vhost | Notes |
+|---|---|---|
+| `/b/{token}` | yes | HTTPS beacons |
+| `/healthz` | yes | Liveness |
+| `POST /api/v1/ingest` | yes | Sentinel HMAC push (still requires ingest secret) |
+| `/ui/`, other `/api/v1/*` | no (default) | Use an SSH tunnel or uncomment the optional `@ops` allowlist in the Caddyfile |
+
+Operator via tunnel:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 user@hub-host
+# then open http://127.0.0.1:8080/ui/ and paste ./data/api.token
+```
 
 ## Hub (behind the proxy)
 
@@ -29,23 +51,26 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
 
 Secrets land under `./data` (`ingest.secret`, `api.token`). Never embed them in forged decoys.
 
-Operator UI: `https://beacon.example.com/ui/` (paste `api.token` in-browser).
+## Client IP (`X-Forwarded-For`)
+
+The hub, when the peer is a trusted proxy, records the **leftmost** `X-Forwarded-For` IP. The proxy must **overwrite** that header with the TCP client address (`$remote_addr` / Caddy `{remote_host}`). Do not use nginx `$proxy_add_x_forwarded_for` on the edge: a client-supplied header would become leftmost and spoof the logged source.
 
 ## Caddy
 
 Requires [Caddy](https://caddyserver.com/) with automatic HTTPS (public DNS name recommended).
 
-1. Edit [`Caddyfile`](Caddyfile): replace `beacon.example.com` with your hostname.
-2. Run Caddy from this directory (or point `caddy run --config` at the file).
+1. Edit [`Caddyfile`](Caddyfile) in this directory: replace `beacon.example.com` with your hostname.
+2. Run Caddy from this directory (or `caddy run --config Caddyfile`).
 3. Confirm: `curl -sS https://beacon.example.com/healthz`
+4. Confirm UI is not public: `curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.example.com/ui/` (expect `404`).
 
 ## nginx
 
 Requires certificates you already have (Let's Encrypt, internal CA, etc.).
 
-1. Copy [`nginx.conf.snippet`](nginx.conf.snippet) into a site config.
+1. Copy the snippet from this same directory: [`nginx.conf.snippet`](./nginx.conf.snippet) (path: `examples/tls-hub/nginx.conf.snippet`).
 2. Set `server_name`, `ssl_certificate`, and `ssl_certificate_key`.
-3. Reload nginx. Confirm `/healthz` over HTTPS.
+3. Reload nginx. Confirm `/healthz` over HTTPS and that `/ui/` returns 404 on the public vhost.
 
 ## Forge for beacon-max
 
@@ -68,9 +93,12 @@ Place only the forged artifact on the endpoint. Keep hub data, signing keys, and
 curl -sS https://beacon.example.com/healthz
 # Expect JSON with "ok": true
 
-# After a client fetch of the decoy's beacon URL:
+curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.example.com/ui/
+# Expect 404 with the default recipe
+
+# Operator events (via SSH tunnel to loopback, not the public vhost):
 curl -sS -H "Authorization: Bearer $(tr -d '\n' < ./data/api.token)" \
-  'https://beacon.example.com/api/v1/events?after_seq=0&limit=20'
+  'http://127.0.0.1:8080/api/v1/events?after_seq=0&limit=20'
 ```
 
 ## What this example is not
@@ -78,3 +106,4 @@ curl -sS -H "Authorization: Bearer $(tr -d '\n' < ./data/api.token)" \
 - Not mTLS for ingest (HMAC remains; put mTLS on the proxy if you need it).
 - Not a substitute for `kunari package agent` / sentinel filesystem tiers.
 - Not a claim that every open of a decoy file will beacon - only fetches that hit the embedded lure.
+- Not a recommendation to put the operator console on the public Internet.
