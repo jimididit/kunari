@@ -115,6 +115,10 @@ func xpath4663(targets []Target) (string, error) {
 	return "*[System[(EventID=4663)] and (" + strings.Join(parts, " or ") + ")]", nil
 }
 
+func isHex(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')
+}
+
 func safeObjectName(p string) bool {
 	if p == "" || len(p) > 260 {
 		return false
@@ -154,13 +158,20 @@ func parse4663(raw string, targets []Target) []Touch {
 		if mask == "" {
 			mask = findField(block, "AccessMask:")
 		}
+		accesses := findField(block, "Accesses:")
 		proc := findField(block, "Process Name:")
 		if proc == "" {
 			proc = findField(block, "ProcessName:")
 		}
+		action := mapAccessMask(mask)
+		if action == "open" {
+			if fromList := mapAccessList(accesses); fromList != "" {
+				action = fromList
+			}
+		}
 		touches = append(touches, Touch{
 			Path:     path,
-			Action:   mapAccessMask(mask),
+			Action:   action,
 			Occurred: time.Now().UTC(),
 			Proven:   true,
 			Extra: map[string]string{
@@ -182,9 +193,31 @@ func findField(block, label string) string {
 	return strings.TrimSpace(line)
 }
 
+func mapAccessList(accesses string) string {
+	l := strings.ToLower(accesses)
+	switch {
+	case strings.Contains(l, "delete"):
+		return "delete"
+	case strings.Contains(l, "writedata") || strings.Contains(l, "appenddata") || strings.Contains(l, "addfile"):
+		return "modify"
+	case strings.Contains(l, "readdata") || strings.Contains(l, "listdirectory"):
+		return "read"
+	default:
+		return ""
+	}
+}
+
 func mapAccessMask(mask string) string {
 	m := strings.ToLower(strings.TrimSpace(mask))
 	m = strings.TrimPrefix(m, "0x")
+	end := 0
+	for end < len(m) && isHex(m[end]) {
+		end++
+	}
+	m = m[:end]
+	if m == "" {
+		return "open"
+	}
 	v, err := strconv.ParseUint(m, 16, 64)
 	if err != nil {
 		return "open"

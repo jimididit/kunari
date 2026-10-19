@@ -27,6 +27,38 @@ Event[0]
 	}
 }
 
+func TestParse4663RenderedMasks(t *testing.T) {
+	raw := `
+Event[0]
+        Object Name:            C:\lab\decoy.env
+        Process Name:           C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        Accesses:               WriteData (or AddFile)
+        Access Mask:            0x2
+Event[1]
+        Object Name:            C:\lab\decoy.env
+        Accesses:               ReadData (or ListDirectory)
+        Access Mask:            0x1
+Event[2]
+        Object Name:            C:\lab\decoy.env
+        Accesses:               DELETE
+        Access Mask:            0x10000
+Event[3]
+        Object Name:            C:\lab\decoy.env
+        Accesses:               ReadAttributes
+        Access Mask:            0x80
+`
+	got := parse4663(raw, []Target{{Path: `C:\lab\decoy.env`, TokenID: "abc"}})
+	want := []string{"modify", "read", "delete", "open"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d", len(got))
+	}
+	for i, action := range want {
+		if got[i].Action != action {
+			t.Fatalf("event %d action %s want %s mask %s", i, got[i].Action, action, got[i].Extra["access_mask"])
+		}
+	}
+}
+
 func TestXPath4663FiltersObjectName(t *testing.T) {
 	q, err := xpath4663([]Target{{Path: `C:\lab\canary.env`}})
 	if err != nil {
