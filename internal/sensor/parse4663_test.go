@@ -2,7 +2,10 @@
 
 package sensor
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParse4663(t *testing.T) {
 	raw := `
@@ -21,6 +24,22 @@ Event[0]
 	}
 	if got[0].Extra["process_name"] != `C:\Windows\System32\notepad.exe` {
 		t.Fatalf("process %q", got[0].Extra["process_name"])
+	}
+}
+
+func TestXPath4663FiltersObjectName(t *testing.T) {
+	q, err := xpath4663([]Target{{Path: `C:\lab\canary.env`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `ObjectName']='C:\lab\canary.env'`) {
+		t.Fatalf("query %s", q)
+	}
+	if !strings.Contains(q, "EventID=4663") {
+		t.Fatalf("query %s", q)
+	}
+	if _, err := xpath4663([]Target{{Path: `C:\lab\canary.env'`}}); err == nil {
+		t.Fatal("expected reject for quote in path")
 	}
 }
 

@@ -44,7 +44,7 @@ func (w *event4663Watcher) ConfigHash() string { return w.hash }
 func (w *event4663Watcher) Close() error       { return nil }
 
 func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
-	if _, err := queryRecent4663(); err != nil {
+	if err := probe4663(); err != nil {
 		return fmt.Errorf("security log 4663 probe: %w", err)
 	}
 	ticker := time.NewTicker(2 * time.Second)
@@ -54,7 +54,7 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			raw, err := queryRecent4663()
+			raw, err := queryRecent4663(w.targets)
 			if err != nil {
 				continue
 			}
@@ -74,15 +74,60 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 	}
 }
 
-func queryRecent4663() (string, error) {
-	// Larger window: machine-wide File System success auditing floods 4663; /c:50
-	// can drop the decoy's ReadData/WriteData events behind unrelated noise.
-	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:200", "/f:text")
+func probe4663() error {
+	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:1", "/rd:true", "/f:text")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, truncate(string(out), 200))
+	}
+	return nil
+}
+
+func queryRecent4663(targets []Target) (string, error) {
+	// Filter to the decoy path. Machine-wide File System success auditing
+	// generates far more than a fixed /c window of unrelated 4663s, and
+	// wevtutil's default direction is oldest-first.
+	xpath, err := xpath4663(targets)
+	if err != nil {
+		return "", err
+	}
+	// exec.Command does not invoke a shell. The XPath is a fixed template plus
+	// paths limited to safeObjectName.
+	cmd := exec.Command("wevtutil", "qe", "Security", "/q:"+xpath, "/c:30", "/rd:true", "/f:text") // #nosec G204 -- argv, not a shell; path charset-checked
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, truncate(string(out), 200))
 	}
 	return string(out), nil
+}
+
+func xpath4663(targets []Target) (string, error) {
+	var parts []string
+	for _, t := range targets {
+		if !safeObjectName(t.Path) {
+			return "", fmt.Errorf("target path %q cannot be embedded in an XPath query", t.Path)
+		}
+		parts = append(parts, "EventData[Data[@Name='ObjectName']='"+t.Path+"']")
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("no targets")
+	}
+	return "*[System[(EventID=4663)] and (" + strings.Join(parts, " or ") + ")]", nil
+}
+
+func safeObjectName(p string) bool {
+	if p == "" || len(p) > 260 {
+		return false
+	}
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '\\' || r == ':' || r == '.' || r == '_' || r == '-' || r == ' ' || r == '(' || r == ')':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func parse4663(raw string, targets []Target) []Touch {

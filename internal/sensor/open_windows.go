@@ -11,7 +11,7 @@ func OpenBest(targets []Target) (Watcher, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no targets")
 	}
-	if _, err := queryRecent4663(); err == nil {
+	if err := probe4663(); err == nil {
 		return newEvent4663(targets)
 	}
 	w, err := newRDC(targets)
