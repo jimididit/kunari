@@ -109,7 +109,7 @@ func BuildAgent(opts AgentOptions) error {
 		HeartbeatEvery: "60s",
 		DataDir:        targetJoin(goos, prefix, "data"),
 		KeyPath:        targetJoin(goos, prefix, "data", "signing.key"),
-		AgentVersion:   "0.3.0",
+		AgentVersion:   "0.4.0",
 		HubURL:         strings.TrimRight(opts.HubURL, "/"),
 		HubSecretFile:  targetJoin(goos, prefix, "etc", "ingest.secret"),
 	}
