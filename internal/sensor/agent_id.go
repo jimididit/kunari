@@ -22,7 +22,8 @@ func loadOrCreateAgentID(dataDir string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dataDir, agentIDFile)
-	if b, err := os.ReadFile(path); err == nil { // #nosec G304 -- path under safepath-cleaned data_dir
+	b, err := os.ReadFile(path) // #nosec G304 -- path under safepath-cleaned data_dir
+	if err == nil {
 		id := strings.TrimSpace(string(b))
 		if id != "" {
 			return id, nil
