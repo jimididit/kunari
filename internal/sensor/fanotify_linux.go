@@ -99,15 +99,17 @@ func (w *fanotifyWatcher) Run(ctx context.Context, out chan<- Touch) error {
 }
 
 func mapFanMask(mask uint64) string {
+	// Prefer the most specific bit when the kernel ORs multiple into one event.
+	// Checking FAN_OPEN first would hide ACCESS/MODIFY on multi-bit masks.
 	switch {
 	case mask&unix.FAN_OPEN_EXEC != 0:
 		return "exec"
-	case mask&unix.FAN_OPEN != 0:
-		return "open"
-	case mask&unix.FAN_ACCESS != 0:
-		return "read"
 	case mask&unix.FAN_MODIFY != 0 || mask&unix.FAN_CLOSE_WRITE != 0:
 		return "modify"
+	case mask&unix.FAN_ACCESS != 0:
+		return "read"
+	case mask&unix.FAN_OPEN != 0:
+		return "open"
 	default:
 		return "open"
 	}
