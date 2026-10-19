@@ -33,6 +33,8 @@ func newPackageAgentCmd() *cobra.Command {
 		Short: "Build a per-OS sentinel + decoy agent package",
 		Long: "Write a directory with decoy, sentinel.json, install script, and service unit " +
 			"for linux, windows, or darwin. Place a matching kunari binary in bin/ before install.\n\n" +
+			"Forge the decoy with --detect both first so beacons remain if the sentinel is stopped. " +
+			"DEPLOY.md in the package repeats this dual-layer guidance.\n\n" +
 			authorizedUse,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := pack.BuildAgent(pack.AgentOptions{

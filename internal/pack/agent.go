@@ -126,9 +126,13 @@ func BuildAgent(opts AgentOptions) error {
 		return err
 	}
 
-	deploy := deployMarkdown(goos, prefix, binName, base, true)
+	detect := detectFromSiblingManifest(art)
+	deploy := deployMarkdown(goos, prefix, binName, base, detect)
 	if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
 		return err
+	}
+	if detect != "" && detect != "both" {
+		fmt.Fprintf(os.Stderr, "warning: decoy manifest detect=%q; prefer forge --detect both for dual-layer agent deploys\n", detect)
 	}
 
 	switch goos {
