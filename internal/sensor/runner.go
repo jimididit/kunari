@@ -236,15 +236,14 @@ func (r *Runner) emitHeartbeat(ctx context.Context, drift bool) {
 		r.Log.Error("heartbeat chain", "err", err)
 		return
 	}
-	// Heartbeats go straight to hub (control plane). Alert queue only for drift
-	// so local alerts.jsonl / stdout are not spammed every interval.
-	if r.hubPush != nil {
+	// Heartbeats go straight to hub (control plane). On config drift, use the
+	// alert queue once (includes hub) so the hub is not delivered twice.
+	if drift {
+		_ = r.queue.Enqueue(ev)
+	} else if r.hubPush != nil {
 		if err := r.hubPush.Deliver(ctx, ev); err != nil {
 			r.Log.Debug("heartbeat hub push", "err", err)
 		}
-	}
-	if drift {
-		_ = r.queue.Enqueue(ev)
 	}
 }
 

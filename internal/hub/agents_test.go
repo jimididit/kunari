@@ -25,9 +25,13 @@ func TestAgentTrackerMissingAndRecovery(t *testing.T) {
 	if len(miss) != 1 || miss[0].ID != "agent-1" || !miss[0].Missing {
 		t.Fatalf("expected one missing alert, got %#v", miss)
 	}
-	// Second check should not re-alert.
+	// Until MarkMissingAlerted, CheckMissing keeps returning the candidate.
+	if got := tr.CheckMissing(time.Now().UTC().Add(250 * time.Millisecond)); len(got) != 1 {
+		t.Fatalf("expected retry candidate before mark, got %#v", got)
+	}
+	tr.MarkMissingAlerted("agent-1")
 	if got := tr.CheckMissing(time.Now().UTC().Add(300 * time.Millisecond)); len(got) != 0 {
-		t.Fatalf("expected no re-alert, got %#v", got)
+		t.Fatalf("expected no re-alert after mark, got %#v", got)
 	}
 
 	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")

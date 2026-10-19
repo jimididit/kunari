@@ -123,8 +123,9 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) recordIngest(ev *event.Event) error {
-	isHeartbeat := ev.TokenID == "heartbeat" || ev.Action == "heartbeat"
-	if isHeartbeat {
+	// Only token_id identifies control-plane heartbeats. Do not trust action alone:
+	// a signed ingest with action=heartbeat on a real token must still alert.
+	if ev.TokenID == "heartbeat" {
 		h.agents.NoteHeartbeat(ev)
 		if err := h.chain.Append(ev); err != nil {
 			return err
@@ -215,6 +216,8 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)
 			continue
 		}
+		// Mark alerted only after durable emit so a failed append/enqueue can retry.
+		h.agents.MarkMissingAlerted(rec.ID)
 		h.log.Info("agent missing", "agent_id", rec.ID, "hostname", rec.Hostname, "last_seen", rec.LastSeen)
 		h.mu.Lock()
 		h.hits++

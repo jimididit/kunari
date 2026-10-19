@@ -94,10 +94,8 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	rec.LastSeen = ev.ObservedAt
-	if rec.LastSeen.IsZero() {
-		rec.LastSeen = time.Now().UTC()
-	}
+	// Hub clock only - sender ObservedAt must not push last-seen into the future.
+	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
 	rec.MissingAlerted = false
 	if ev.Host != nil {
@@ -117,7 +115,8 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) {
 	_ = t.persistLocked()
 }
 
-// CheckMissing marks overdue agents and returns those that need a new alert.
+// CheckMissing marks overdue agents and returns those still needing an alert.
+// MissingAlerted is set only via MarkMissingAlerted after a successful emit.
 func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	if t == nil || !t.enabled() {
 		return nil
@@ -125,6 +124,7 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []*agentRecord
+	changed := false
 	for _, rec := range t.byID {
 		if rec.LastSeen.IsZero() {
 			continue
@@ -133,20 +133,38 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 			if rec.Missing {
 				rec.Missing = false
 				rec.MissingAlerted = false
+				changed = true
 			}
 			continue
 		}
-		rec.Missing = true
+		if !rec.Missing {
+			rec.Missing = true
+			changed = true
+		}
 		if !rec.MissingAlerted {
-			rec.MissingAlerted = true
 			cp := *rec
 			out = append(out, &cp)
 		}
 	}
-	if len(out) > 0 {
+	if changed {
 		_ = t.persistLocked()
 	}
 	return out
+}
+
+// MarkMissingAlerted records that a missing-agent alert was durably emitted.
+func (t *agentTracker) MarkMissingAlerted(id string) {
+	if t == nil || id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || !rec.Missing {
+		return
+	}
+	rec.MissingAlerted = true
+	_ = t.persistLocked()
 }
 
 func (t *agentTracker) Snapshot() []agentView {
