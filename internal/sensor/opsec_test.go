@@ -47,6 +47,7 @@ func TestWriteExampleConfigPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if runtime.GOOS == "windows" {
+		// NTFS ACL assertions live in opsec_windows_test.go
 		return
 	}
 	st, err := os.Stat(path)
