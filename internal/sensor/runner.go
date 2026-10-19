@@ -25,6 +25,8 @@ type Runner struct {
 	keys    *kcrypto.KeyPair
 	chain   *event.Chain
 	queue   *sink.Queue
+	hubPush sink.Sink // optional; heartbeats Deliver here without alert-queue spam
+	agentID string
 	byPath   map[string]Target
 	copyCorr *copyCorrelator
 }
@@ -38,6 +40,10 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	}
 	if err := hardenPrivateDir(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("sentinel data_dir: %w", err)
+	}
+	agentID, err := loadOrCreateAgentID(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent id: %w", err)
 	}
 	keyPath := cfg.KeyPath
 	if keyPath == "" {
@@ -56,11 +62,13 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 		return nil, err
 	}
 	sinks := []sink.Sink{fileSink, sink.NewStdoutSink()}
+	var hubPush sink.Sink
 	if cfg.HubURL != "" || cfg.HubSecretFile != "" {
 		hubSink, err := newHubPushSink(cfg)
 		if err != nil {
 			return nil, err
 		}
+		hubPush = hubSink
 		sinks = append(sinks, hubSink)
 		// Log host only - full ingest URL and paths help local enumerators.
 		log.Info("sentinel hub push enabled", "hub", hubPushLogHost(cfg.HubURL))
@@ -78,7 +86,8 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 		byPath[filepath.Clean(t.Path)] = t
 	}
 	return &Runner{
-		Cfg: cfg, Log: log, Watcher: w, keys: keys, chain: chain, queue: q, byPath: byPath,
+		Cfg: cfg, Log: log, Watcher: w, keys: keys, chain: chain, queue: q,
+		hubPush: hubPush, agentID: agentID, byPath: byPath,
 		copyCorr: newCopyCorrelator(defaultCopyWindow),
 	}, nil
 }
@@ -186,12 +195,7 @@ func (r *Runner) handleTouch(ctx context.Context, t Touch) {
 		ev.Confidence.CopySuspected = true
 	}
 	ev.File = &event.FileInfo{Path: t.Path}
-	hn, _ := os.Hostname()
-	ev.Host = &event.HostInfo{
-		Hostname:     hn,
-		OS:           runtime.GOOS,
-		AgentVersion: r.Cfg.AgentVersion,
-	}
+	ev.Host = r.hostInfo()
 	ev.Actor = &event.Actor{
 		PID:                t.PID,
 		Exe:                exe,
@@ -220,31 +224,38 @@ func (r *Runner) handleTouch(ctx context.Context, t Touch) {
 }
 
 func (r *Runner) emitHeartbeat(ctx context.Context, drift bool) {
-	action := "attrib"
+	ev := event.New("heartbeat", "sentinel", string(r.Watcher.Tier()), "heartbeat")
+	ev.Memo = "heartbeat;every=" + r.Cfg.HeartbeatEvery
 	if drift {
-		action = "perm_change"
+		ev.Memo = "config_drift;every=" + r.Cfg.HeartbeatEvery
 	}
-	ev := event.New("heartbeat", "sentinel", string(r.Watcher.Tier()), action)
-	ev.Memo = "heartbeat"
-	if drift {
-		ev.Memo = "config_drift"
-	}
-	hn, _ := os.Hostname()
-	ev.Host = &event.HostInfo{
-		Hostname:     hn,
-		OS:           runtime.GOOS,
-		AgentVersion: r.Cfg.AgentVersion,
-	}
+	ev.Host = r.hostInfo()
 	ev.File = &event.FileInfo{Path: "watcher:" + r.Watcher.ConfigHash()}
 	ev.Confidence.Action = "proven"
 	if err := r.chain.Append(ev); err != nil {
 		r.Log.Error("heartbeat chain", "err", err)
 		return
 	}
+	// Heartbeats go straight to hub (control plane). Alert queue only for drift
+	// so local alerts.jsonl / stdout are not spammed every interval.
+	if r.hubPush != nil {
+		if err := r.hubPush.Deliver(ctx, ev); err != nil {
+			r.Log.Debug("heartbeat hub push", "err", err)
+		}
+	}
 	if drift {
 		_ = r.queue.Enqueue(ev)
 	}
-	_ = ctx
+}
+
+func (r *Runner) hostInfo() *event.HostInfo {
+	hn, _ := os.Hostname()
+	return &event.HostInfo{
+		ID:           r.agentID,
+		Hostname:     hn,
+		OS:           runtime.GOOS,
+		AgentVersion: r.Cfg.AgentVersion,
+	}
 }
 
 func newHubPushSink(cfg *Config) (*sink.WebhookSink, error) {

@@ -16,6 +16,8 @@
   var eventsEmpty = document.getElementById("events-empty");
   var tokensBody = document.getElementById("tokens-body");
   var tokensEmpty = document.getElementById("tokens-empty");
+  var agentsBody = document.getElementById("agents-body");
+  var agentsEmpty = document.getElementById("agents-empty");
 
   var liveAbort = null;
   var reconnectTimer = null;
@@ -123,6 +125,53 @@
     document.getElementById("stat-queue").textContent = String(pending);
     var sinks = data.queue && data.queue.sinks ? data.queue.sinks : [];
     document.getElementById("stat-sinks").textContent = sinks.length ? sinks.join(", ") : "(none)";
+    renderAgents(data.agents || []);
+  }
+
+  function renderAgents(agents) {
+    var missing = 0;
+    for (var i = 0; i < agents.length; i++) {
+      if (agents[i] && agents[i].missing) missing++;
+    }
+    document.getElementById("stat-agents").textContent = agents.length
+      ? String(agents.length - missing) + " ok / " + String(missing) + " missing"
+      : "0";
+    agentsBody.textContent = "";
+    if (!agents.length) {
+      agentsEmpty.classList.remove("hidden");
+      return;
+    }
+    agentsEmpty.classList.add("hidden");
+    for (var j = 0; j < agents.length; j++) {
+      (function (a) {
+        var tr = document.createElement("tr");
+        var cells = [
+          a.hostname || "(unknown)",
+          a.missing ? "missing" : "ok",
+          a.os || "",
+          a.tier || "",
+          fmtTime(a.last_seen),
+          shortID(a.id),
+        ];
+        for (var k = 0; k < cells.length; k++) {
+          var td = document.createElement("td");
+          if (k === 1) {
+            var pill = document.createElement("span");
+            pill.className = "pill " + (a.missing ? "bad" : "ok");
+            pill.textContent = cells[k];
+            td.appendChild(pill);
+          } else {
+            if (k === 5) {
+              td.className = "mono";
+              td.title = a.id || "";
+            }
+            td.textContent = cells[k];
+          }
+          tr.appendChild(td);
+        }
+        agentsBody.appendChild(tr);
+      })(agents[j]);
+    }
   }
 
   function prependEvent(ev) {

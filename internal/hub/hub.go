@@ -30,8 +30,12 @@ type Config struct {
 	// Empty (default): always use RemoteAddr; never trust X-Forwarded-For.
 	TrustedProxies []string
 	ClientIPHeader string // default X-Forwarded-For when TrustedProxies is set
-	Collect        collect.Level
-	Logger         *slog.Logger
+	// AgentStaleAfter is how long after the last sentinel heartbeat before the
+	// hub emits an agent_missing alert. Zero disables missing-agent watch.
+	// Default (when unset via CLI): 3m.
+	AgentStaleAfter time.Duration
+	Collect         collect.Level
+	Logger          *slog.Logger
 }
 
 type Hub struct {
@@ -46,6 +50,7 @@ type Hub struct {
 	apiToken       []byte
 	seen           *seenIDs
 	subs           *apiSubs
+	agents         *agentTracker
 	trustedProxies []*net.IPNet
 	mu             sync.Mutex
 	hits           int
@@ -120,6 +125,14 @@ func New(cfg Config) (*Hub, error) {
 		}
 		cfg.Logger.Info("hub trusted-proxy client IP enabled", "proxies", len(trusted), "header", hdr)
 	}
+	agents, err := newAgentTracker(cfg.DataDir, cfg.AgentStaleAfter)
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
+	if agents.enabled() {
+		cfg.Logger.Info("hub agent watch enabled", "stale_after", cfg.AgentStaleAfter.String())
+	}
 	return &Hub{
 		cfg:            cfg,
 		log:            cfg.Logger,
@@ -132,6 +145,7 @@ func New(cfg Config) (*Hub, error) {
 		apiToken:       apiToken,
 		seen:           newSeenIDs(8192),
 		subs:           newAPISubs(),
+		agents:         agents,
 		trustedProxies: trusted,
 	}, nil
 }
@@ -151,6 +165,13 @@ func (h *Hub) Run(ctx context.Context) error {
 		defer wg.Done()
 		h.queue.Run(ctx)
 	}()
+	if h.agents != nil && h.agents.enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.watchAgents(ctx)
+		}()
+	}
 
 	httpSrv := &http.Server{
 		Addr:              h.cfg.HTTPListen,

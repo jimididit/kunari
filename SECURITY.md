@@ -64,6 +64,7 @@ Practical guidance:
 - A world-readable config discloses targets, hub URL, and secret paths - keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; owner/current-user/SYSTEM/Administrators NTFS ACL on Windows). On start, Kunari hardens those paths and refuses to run if they remain broadly readable (Unix group/other bits; Windows Allow ACEs for World, Authenticated Users, or Builtin Users). If Windows lacks WRITE_DAC, an already-private ACL is accepted; a still-broad ACL fails closed. The current process user is always granted so a dedicated service account is not locked out when it is not the file owner.
 - Prefer a dedicated low-privilege service account (`kunari sentinel install-hints` / agent pack under `/opt`).
 - Prefer forge `--detect both` (dual-layer): HTTPS/DNS beacons can still fire if the sentinel process is killed. Avoid agent-only when the threat includes a hostile local admin.
+- With hub push configured, sentinels send heartbeats; the hub alerts `agent_missing` when a known agent is silent longer than `--agent-stale-after` (default 3m). This does not stop a local admin from killing the process - it shortens time-to-notice.
 - Beacon-max (decoy only, no agent) has the smallest process footprint but does not watch the filesystem - see [examples/tls-hub](examples/tls-hub/README.md).
 - Do not rename the binary to impersonate OS components (`svchost`, `systemd`, …). That is out of scope and harms incident response clarity.
 - Do not expect invisibility from a determined local admin.

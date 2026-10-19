@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/jimididit/kunari/internal/collect"
 	"github.com/jimididit/kunari/internal/hub"
@@ -15,16 +16,17 @@ import (
 
 func newHubCmd() *cobra.Command {
 	var (
-		listen         string
-		dnsListen      string
-		dnsZone        string
-		dataDir        string
-		keyPath        string
-		ingestSecret   string
-		apiToken       string
-		collectLvl     string
-		trustedProxies []string
-		clientIPHeader string
+		listen          string
+		dnsListen       string
+		dnsZone         string
+		dataDir         string
+		keyPath         string
+		ingestSecret    string
+		apiToken        string
+		collectLvl      string
+		trustedProxies  []string
+		clientIPHeader  string
+		agentStaleAfter time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "hub",
@@ -49,6 +51,7 @@ func newHubCmd() *cobra.Command {
 				APITokenPath:     apiToken,
 				TrustedProxies:   trustedProxies,
 				ClientIPHeader:   clientIPHeader,
+				AgentStaleAfter:  agentStaleAfter,
 				Collect:          lvl,
 			})
 			if err != nil {
@@ -71,6 +74,7 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&apiToken, "api-token", "", "operator API bearer token path (default: <data>/api.token)")
 	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil, "CIDR/IP of reverse proxies allowed to set client-IP header (repeatable); empty = trust RemoteAddr only")
 	cmd.Flags().StringVar(&clientIPHeader, "client-ip-header", "X-Forwarded-For", "header used when peer matches --trusted-proxy")
+	cmd.Flags().DurationVar(&agentStaleAfter, "agent-stale-after", 3*time.Minute, "alert when a heartbeating sentinel is silent this long (0 disables)")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if keyPath == "" {

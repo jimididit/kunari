@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -122,6 +123,19 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) recordIngest(ev *event.Event) error {
+	isHeartbeat := ev.TokenID == "heartbeat" || ev.Action == "heartbeat"
+	if isHeartbeat {
+		h.agents.NoteHeartbeat(ev)
+		if err := h.chain.Append(ev); err != nil {
+			return err
+		}
+		// Heartbeats are control-plane: record + track, do not alert/SSE flood.
+		h.mu.Lock()
+		h.hits++
+		h.mu.Unlock()
+		return nil
+	}
+
 	// Annotate unknown/revoked tokens like beacons (memo only).
 	active, err := h.reg.ExistsActive(ev.TokenID)
 	if err != nil {
@@ -134,7 +148,7 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 		if m.Revoked {
 			ev.Memo = ev.Memo + " [REVOKED]"
 		}
-	} else if !active && ev.TokenID != "heartbeat" && ev.TokenID != "unmapped" {
+	} else if !active && ev.TokenID != "unmapped" {
 		if ev.Memo != "" {
 			ev.Memo += " | "
 		}
@@ -159,4 +173,51 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	h.hits++
 	h.mu.Unlock()
 	return nil
+}
+
+func (h *Hub) watchAgents(ctx context.Context) {
+	interval := h.cfg.AgentStaleAfter / 6
+	if interval < 50*time.Millisecond {
+		interval = 50 * time.Millisecond
+	}
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.emitMissingAgents(time.Now().UTC())
+		}
+	}
+}
+
+func (h *Hub) emitMissingAgents(now time.Time) {
+	for _, rec := range h.agents.CheckMissing(now) {
+		ev := event.New(rec.ID, "hub", "agent-watch", "agent_missing")
+		ev.Memo = "sentinel heartbeat overdue"
+		ev.Host = &event.HostInfo{
+			ID:           rec.ID,
+			Hostname:     rec.Hostname,
+			OS:           rec.OS,
+			AgentVersion: rec.AgentVersion,
+		}
+		ev.Confidence.Action = "inferred"
+		if err := h.chain.Append(ev); err != nil {
+			h.log.Error("agent_missing chain", "agent_id", rec.ID, "err", err)
+			continue
+		}
+		h.subs.Broadcast(ev)
+		if err := h.queue.Enqueue(ev); err != nil {
+			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)
+			continue
+		}
+		h.log.Info("agent missing", "agent_id", rec.ID, "hostname", rec.Hostname, "last_seen", rec.LastSeen)
+		h.mu.Lock()
+		h.hits++
+		h.mu.Unlock()
+	}
 }
