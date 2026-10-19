@@ -43,7 +43,7 @@ go install github.com/jimididit/kunari/cmd/kunari@latest
 kunari self-test
 ```
 
-Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.4.0`.
+Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.5.0`.
 
 **From a clone** (local `bin/` keeps the binary out of the repo root; that directory is gitignored):
 
@@ -150,7 +150,7 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.4.0** is the current release: `kunari package agent` (per-OS endpoint bundle), TLS reverse-proxy recipes for beacon-max collectors ([examples/tls-hub](examples/tls-hub/README.md)), plus the v0.3 hub UI / operator APIs and sentinel OPSEC basics.
+**v0.5.0** is the current release: hostile-local OPSEC P0 (quieter logs, `KUNARI_SENTINEL_CONFIG`, Windows ACL fail-closed), hub missing-agent heartbeat watch, dual-layer pack guidance, plus v0.4 agent package and TLS hub recipes.
 
 ## Contributing
 
