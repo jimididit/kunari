@@ -59,6 +59,20 @@ Event[3]
 	}
 }
 
+func TestParse4663StripsMaskNUL(t *testing.T) {
+	raw := "Event[0]\n  Object Name: C:\\lab\\decoy.env\n  Access Mask: 0x1\x00\r\n  Process Name: C:\\Windows\\System32\\notepad.exe\n"
+	got := parse4663(raw, []Target{{Path: `C:\lab\decoy.env`, TokenID: "abc"}})
+	if len(got) != 1 {
+		t.Fatalf("got %d", len(got))
+	}
+	if got[0].Action != "read" {
+		t.Fatalf("action %s", got[0].Action)
+	}
+	if got[0].Extra["access_mask"] != "0x1" {
+		t.Fatalf("mask %q", got[0].Extra["access_mask"])
+	}
+}
+
 func TestXPath4663FiltersObjectName(t *testing.T) {
 	q, err := xpath4663([]Target{{Path: `C:\lab\canary.env`}})
 	if err != nil {

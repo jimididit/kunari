@@ -190,7 +190,8 @@ func findField(block, label string) string {
 	}
 	rest := block[idx+len(label):]
 	line, _, _ := strings.Cut(rest, "\n")
-	return strings.TrimSpace(line)
+	// wevtutil text sometimes ends the value with a NUL before CRLF.
+	return strings.Trim(line, " \t\r\n\x00")
 }
 
 func mapAccessList(accesses string) string {
