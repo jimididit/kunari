@@ -90,12 +90,12 @@ func (r *Runner) Close() error {
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	r.Log.Info("sentinel armed",
-		"tier", r.Watcher.Tier(),
+	// One-line info for operators/journals; hashes/caps at debug (hostile-local OPSEC).
+	r.Log.Info("sentinel armed", "tier", r.Watcher.Tier(), "targets", len(r.Cfg.Targets))
+	r.Log.Debug("sentinel armed detail",
 		"capabilities", r.Watcher.Capabilities(),
 		"config_hash", r.Cfg.Hash(),
 		"watcher_hash", r.Watcher.ConfigHash(),
-		"targets", len(r.Cfg.Targets),
 	)
 
 	go r.queue.Run(ctx)

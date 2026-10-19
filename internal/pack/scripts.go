@@ -54,14 +54,15 @@ Type=simple
 User=kunari
 Group=kunari
 UMask=0077
-ExecStart=%s sentinel run --config %s
+Environment=KUNARI_SENTINEL_CONFIG=%s
+ExecStart=%s sentinel run
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
-`, bin, cfg)
+`, cfg, bin)
 }
 
 func darwinInstall(prefix, binName string) string {
@@ -107,13 +108,16 @@ func darwinPlist(prefix, binName string) string {
 <dict>
   <key>Label</key>
   <string>com.jimididit.kunari-sentinel</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KUNARI_SENTINEL_CONFIG</key>
+    <string>%s</string>
+  </dict>
   <key>ProgramArguments</key>
   <array>
     <string>%s</string>
     <string>sentinel</string>
     <string>run</string>
-    <string>--config</string>
-    <string>%s</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -121,7 +125,7 @@ func darwinPlist(prefix, binName string) string {
   <true/>
 </dict>
 </plist>
-`, bin, cfg)
+`, cfg, bin)
 }
 
 func windowsInstall(prefix, binName string) string {
@@ -173,7 +177,14 @@ $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" >nul' -
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
 $Cfg = Join-Path $Prefix 'etc\sentinel.json'
-$action = New-ScheduledTaskAction -Execute $Bin -Argument ('sentinel run --config "{0}"' -f $Cfg)
+# Wrapper sets KUNARI_SENTINEL_CONFIG so process argv omits the config path.
+$Runner = Join-Path $Prefix 'bin\run-sentinel.cmd'
+@(
+  '@echo off'
+  ('set "KUNARI_SENTINEL_CONFIG={0}"' -f $Cfg)
+  ('"{0}" sentinel run' -f $Bin)
+) | Set-Content -LiteralPath $Runner -Encoding ascii
+$action = New-ScheduledTaskAction -Execute $Runner
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)

@@ -60,8 +60,15 @@ func TestBuildAgentLinux(t *testing.T) {
 		t.Fatalf("target path %q", cfg.Targets[0].Path)
 	}
 	unit, _ := os.ReadFile(filepath.Join(out, "kunari-sentinel.service"))
-	if !strings.Contains(string(unit), "User=kunari") {
+	unitBody := string(unit)
+	if !strings.Contains(unitBody, "User=kunari") {
 		t.Fatal("unit missing User=kunari")
+	}
+	if !strings.Contains(unitBody, "Environment=KUNARI_SENTINEL_CONFIG=") {
+		t.Fatal("unit should set KUNARI_SENTINEL_CONFIG (avoid config path in argv)")
+	}
+	if strings.Contains(unitBody, "sentinel run --config") {
+		t.Fatal("unit ExecStart should not pass --config when env is set")
 	}
 	if runtime.GOOS != "windows" {
 		st, err := os.Stat(filepath.Join(out, "install.sh"))
@@ -173,6 +180,12 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	body := string(ps1)
 	if !strings.Contains(body, "Register-ScheduledTask") {
 		t.Fatal("windows install should use Register-ScheduledTask (kunari.exe is not a Windows Service)")
+	}
+	if !strings.Contains(body, "run-sentinel.cmd") || !strings.Contains(body, "KUNARI_SENTINEL_CONFIG") {
+		t.Fatal("windows install should launch via run-sentinel.cmd with KUNARI_SENTINEL_CONFIG")
+	}
+	if strings.Contains(body, "sentinel run --config") {
+		t.Fatal("windows task should not put --config on kunari.exe argv")
 	}
 	if strings.Contains(body, "sc.exe create") || strings.Contains(body, "Start-Service KunariSentinel") {
 		t.Fatal("windows install must not register kunari.exe as an sc.exe service")

@@ -29,7 +29,8 @@ func newSentinelRunCmd() *cobra.Command {
 		Use:   "run",
 		Short: "Run the sentinel sensor",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := sensor.LoadConfig(configPath)
+			cfgPath := resolveSentinelConfigPath(configPath)
+			cfg, err := sensor.LoadConfig(cfgPath)
 			if err != nil {
 				return err
 			}
@@ -38,14 +39,18 @@ func newSentinelRunCmd() *cobra.Command {
 				return err
 			}
 			defer r.Close()
-			fmt.Fprintf(os.Stderr, "kunari sentinel tier=%s caps=%q\n", r.Watcher.Tier(), r.Watcher.Capabilities())
-			fmt.Println(authorizedUse)
+			// Interactive TTY: show tier + authorized-use banner. Services stay quieter
+			// (details go to slog; avoid argv/config path chatter in journals).
+			if stdoutIsCharDevice() {
+				fmt.Fprintf(os.Stderr, "kunari sentinel tier=%s caps=%q\n", r.Watcher.Tier(), r.Watcher.Capabilities())
+				fmt.Println(authorizedUse)
+			}
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			return r.Run(ctx)
 		},
 	}
-	cmd.Flags().StringVar(&configPath, "config", "sentinel.json", "sentinel config path")
+	cmd.Flags().StringVar(&configPath, "config", "", "sentinel config path (default: $"+sentinelConfigEnv+" or sentinel.json)")
 	return cmd
 }
 
@@ -86,15 +91,16 @@ func newSentinelInstallHintsCmd() *cobra.Command {
 		Use:   "install-hints",
 		Short: "Print OS-specific install commands (SACL/auditd/systemd)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := sensor.LoadConfig(configPath)
+			cfgPath := resolveSentinelConfigPath(configPath)
+			cfg, err := sensor.LoadConfig(cfgPath)
 			if err != nil {
 				return err
 			}
 			fmt.Print(sensor.PlatformInstallHints(cfg.Targets))
-			fmt.Print(sensor.ServiceUnitHints(cfg, configPath))
+			fmt.Print(sensor.ServiceUnitHints(cfg, cfgPath))
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&configPath, "config", "sentinel.json", "sentinel config path")
+	cmd.Flags().StringVar(&configPath, "config", "", "sentinel config path (default: $"+sentinelConfigEnv+" or sentinel.json)")
 	return cmd
 }
