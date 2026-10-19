@@ -43,7 +43,7 @@ go install github.com/jimididit/kunari/cmd/kunari@latest
 kunari self-test
 ```
 
-Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.3.0`.
+Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.4.0`.
 
 **From a clone** (local `bin/` keeps the binary out of the repo root; that directory is gitignored):
 
@@ -150,9 +150,7 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.3.0** is the current release tag: hub operator UI (`/ui/`), authenticated status/tokens APIs, and sentinel OPSEC basics.
-
-`main` also includes `kunari package agent` (per-OS endpoint bundle) and TLS reverse-proxy examples for beacon-max collectors. Tag **v0.4.0** when you want those in a release archive.
+**v0.4.0** is the current release: `kunari package agent` (per-OS endpoint bundle), TLS reverse-proxy recipes for beacon-max collectors ([examples/tls-hub](examples/tls-hub/README.md)), plus the v0.3 hub UI / operator APIs and sentinel OPSEC basics.
 
 ## Contributing
 
