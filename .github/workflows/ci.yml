@@ -20,7 +20,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Self-test
+        run: go run ./cmd/kunari self-test
       - name: Test
         run: go test ./...
+      - name: Smoke (beacon + unprivileged sentinel)
+        # Hub beacon e2e + unprivileged FS watch (inotify / win-rdc / fsevents).
+        # Privileged tiers (fanotify, win-sacl-4663, eslogger+FDA) stay lab-only.
+        shell: bash
+        run: |
+          go test ./internal/hub/ -count=1 -run 'TestHub|Beacon|SSE'
+          go test ./internal/sensor/ -count=1 -run 'TestUnprivilegedSentinelTouchE2E|TestHardenPrivate|TestLoadConfigHardens|TestWriteExampleConfigPrivate'
       - name: Build
         run: go build -o bin/kunari ./cmd/kunari

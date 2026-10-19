@@ -54,14 +54,14 @@ Kunari is a defensive tripwire, not a stealth agent. Optimize for **resilience a
 
 | Local adversary | What to expect |
 |---|---|
-| Unprivileged user | Must not read `sentinel.json`, `ingest.secret`, or a world-accessible `data_dir`. Unix starts harden/fail-closed on those modes. |
+| Unprivileged user | Must not read `sentinel.json`, `ingest.secret`, or a world-accessible `data_dir`. Starts harden/fail-closed on those modes (Unix permission bits; Windows owner/SYSTEM/Administrators NTFS ACL, rejecting World/Authenticated Users/Builtin Users Allow ACEs). |
 | Local admin / root | Can list processes, services/tasks, and override ACLs. They can find and stop the agent. Plan for that. |
 
 Practical guidance:
 
 - Process name and argv are visible in process listings. Prefer `KUNARI_SENTINEL_CONFIG` (agent pack units/tasks do) so the config path is not on argv.
 - Persistence names (`kunari-sentinel.service`, scheduled task `KunariSentinel`, LaunchDaemon label) are enumerable.
-- A world-readable config discloses targets, hub URL, and secret paths - keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). On start, Kunari sets config/secret files to `0600` when needed and refuses to run if `data_dir` is group/other-accessible.
+- A world-readable config discloses targets, hub URL, and secret paths - keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; owner/SYSTEM/Administrators NTFS ACL on Windows). On start, Kunari hardens those paths and refuses to run if they remain broadly readable (Unix group/other bits; Windows Allow ACEs for World, Authenticated Users, or Builtin Users).
 - Prefer a dedicated low-privilege service account (`kunari sentinel install-hints` / agent pack under `/opt`).
 - Prefer forge `--detect both` (dual-layer): HTTPS/DNS beacons can still fire if the sentinel process is killed. Avoid agent-only when the threat includes a hostile local admin.
 - Beacon-max (decoy only, no agent) has the smallest process footprint but does not watch the filesystem - see [examples/tls-hub](examples/tls-hub/README.md).
