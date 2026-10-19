@@ -59,7 +59,7 @@ Kunari is a defensive tripwire, not a stealth agent. Optimize for **resilience a
 
 Practical guidance:
 
-- Process name and argv (`kunari sentinel run --config …`) are visible in process listings.
+- Process name and argv are visible in process listings. Prefer `KUNARI_SENTINEL_CONFIG` (agent pack units/tasks do) so the config path is not on argv.
 - Persistence names (`kunari-sentinel.service`, scheduled task `KunariSentinel`, LaunchDaemon label) are enumerable.
 - A world-readable config discloses targets, hub URL, and secret paths - keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). On start, Kunari sets config/secret files to `0600` when needed and refuses to run if `data_dir` is group/other-accessible.
 - Prefer a dedicated low-privilege service account (`kunari sentinel install-hints` / agent pack under `/opt`).
