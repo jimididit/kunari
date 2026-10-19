@@ -144,7 +144,7 @@ Kunari has two layers. You can use either or both on an authorized host.
 
 Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub hostname (not `127.0.0.1`) and terminate TLS in front of the hub ([examples/tls-hub](examples/tls-hub/README.md)). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 
-To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), use `kunari package agent` after forging; put a matching release binary in the package `bin/` directory, then run the generated install script on the endpoint. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - `kunari.exe` is not a Windows Service binary.
+To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), forge with `--detect both`, then `kunari package agent`; put a matching release binary in the package `bin/` directory, then run the generated install script on the endpoint. The package `DEPLOY.md` repeats dual-layer guidance. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - `kunari.exe` is not a Windows Service binary.
 
 Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 

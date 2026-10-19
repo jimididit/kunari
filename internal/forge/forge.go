@@ -176,8 +176,13 @@ func renderInstall(m *registry.Manifest, filename string) string {
 		b.WriteString("kunari sentinel run --config sentinel.json\n")
 		b.WriteString("```\n")
 		b.WriteString("The sensor prints the armed detection tier at startup. Prefer fanotify (Linux) or win-sacl-4663 (Windows) when privileges allow.\n")
+		if m.Detect == "both" {
+			b.WriteString("\nDual-layer: for a packaged endpoint install, use `kunari package agent` with this decoy so beacons remain if the sentinel is stopped.\n")
+		} else {
+			b.WriteString("\nNote: `--detect sentinel` is agent-only. Prefer `--detect both` so HTTPS/DNS beacons can still fire if the process is killed.\n")
+		}
 	} else {
-		b.WriteString("`--detect beacon` only: no host sensor required.\n")
+		b.WriteString("`--detect beacon` only: no host sensor required. Do not use `kunari package agent` for beacon-max deploys.\n")
 	}
 	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) + "`\n")
 	return b.String()
