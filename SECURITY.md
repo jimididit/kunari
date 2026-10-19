@@ -50,11 +50,20 @@ Fixes are prioritized by severity and exploitability.
 
 ## Sentinel and local attackers
 
-Kunari is a defensive tripwire, not a stealth agent. A local attacker who can list processes and read files can usually discover that a sentinel is running and, if `sentinel.json` is readable, learn the watched paths.
+Kunari is a defensive tripwire, not a stealth agent. Optimize for **resilience and private config**, not invisibility.
 
-- Process name and argv (`kunari sentinel run --config …`) are visible.
-- A world-readable config discloses targets, hub URL, and secret paths.
-- Keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). On start, Kunari sets config/secret files to `0600` when needed and refuses to run if `data_dir` is group/other-accessible.
-- Prefer a dedicated low-privilege service account (`kunari sentinel install-hints`).
-- Prefer forge `--detect both` so HTTPS/DNS beacons still fire if the sentinel is stopped.
+| Local adversary | What to expect |
+|---|---|
+| Unprivileged user | Must not read `sentinel.json`, `ingest.secret`, or a world-accessible `data_dir`. Unix starts harden/fail-closed on those modes. |
+| Local admin / root | Can list processes, services/tasks, and override ACLs. They can find and stop the agent. Plan for that. |
+
+Practical guidance:
+
+- Process name and argv (`kunari sentinel run --config …`) are visible in process listings.
+- Persistence names (`kunari-sentinel.service`, scheduled task `KunariSentinel`, LaunchDaemon label) are enumerable.
+- A world-readable config discloses targets, hub URL, and secret paths - keep `sentinel.json`, `hub_secret_file`, and `data_dir` private (`0600` / `0700` on Unix; restrictive NTFS ACLs on Windows). On start, Kunari sets config/secret files to `0600` when needed and refuses to run if `data_dir` is group/other-accessible.
+- Prefer a dedicated low-privilege service account (`kunari sentinel install-hints` / agent pack under `/opt`).
+- Prefer forge `--detect both` (dual-layer): HTTPS/DNS beacons can still fire if the sentinel process is killed. Avoid agent-only when the threat includes a hostile local admin.
+- Beacon-max (decoy only, no agent) has the smallest process footprint but does not watch the filesystem - see [examples/tls-hub](examples/tls-hub/README.md).
+- Do not rename the binary to impersonate OS components (`svchost`, `systemd`, …). That is out of scope and harms incident response clarity.
 - Do not expect invisibility from a determined local admin.
