@@ -3,6 +3,7 @@
 package sensor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"unsafe"
@@ -10,8 +11,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// hardenPrivateFile restricts NTFS ACL to the owner, SYSTEM, and Administrators
-// (matching package-agent install.ps1), then verifies no broad Allow ACEs remain.
+// hardenPrivateFile restricts NTFS ACL to the owner, the current process user,
+// SYSTEM, and Administrators (matching package-agent install.ps1 intent), then
+// verifies no broad Allow ACEs remain. If WRITE_DAC is unavailable, accept an
+// already-private ACL instead of failing startup.
 func hardenPrivateFile(path string) error {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -20,13 +23,7 @@ func hardenPrivateFile(path string) error {
 	if st.IsDir() {
 		return fmt.Errorf("%s: expected a file", path)
 	}
-	if err := setPrivateACL(path, false); err != nil {
-		return fmt.Errorf("%s: set private ACL: %w", path, err)
-	}
-	if err := rejectBroadAllowACL(path); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	return nil
+	return hardenPrivatePath(path, false)
 }
 
 func hardenPrivateDir(path string) error {
@@ -37,11 +34,24 @@ func hardenPrivateDir(path string) error {
 	if !st.IsDir() {
 		return fmt.Errorf("%s: expected a directory", path)
 	}
-	if err := setPrivateACL(path, true); err != nil {
-		return fmt.Errorf("%s: set private ACL: %w", path, err)
+	return hardenPrivatePath(path, true)
+}
+
+func hardenPrivatePath(path string, isDir bool) error {
+	if err := setPrivateACL(path, isDir); err != nil {
+		// No WRITE_DAC (or similar): fail closed only if the existing ACL is broad.
+		if err2 := rejectBroadAllowACL(path); err2 == nil {
+			return nil
+		} else {
+			return fmt.Errorf("%s: set private ACL: %w; existing ACL not private: %v", path, err, err2)
+		}
 	}
 	if err := rejectBroadAllowACL(path); err != nil {
-		return fmt.Errorf("%s: %w; restrict NTFS ACL to owner/SYSTEM/Administrators", path, err)
+		hint := "restrict NTFS ACL to owner/current-user/SYSTEM/Administrators"
+		if isDir {
+			return fmt.Errorf("%s: %w; %s", path, err, hint)
+		}
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
 }
@@ -58,6 +68,10 @@ func setPrivateACL(path string, isDir bool) error {
 	if owner == nil {
 		return fmt.Errorf("no owner SID")
 	}
+	selfSID, err := currentProcessUserSID()
+	if err != nil {
+		return err
+	}
 	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
 		return err
@@ -73,22 +87,57 @@ func setPrivateACL(path string, isDir bool) error {
 		inherit = windows.CONTAINER_INHERIT_ACE | windows.OBJECT_INHERIT_ACE
 	}
 
-	entries := []windows.EXPLICIT_ACCESS{
-		explicitGrant(owner, inherit),
-		explicitGrant(systemSID, inherit),
-		explicitGrant(adminSID, inherit),
-	}
+	entries := uniqueGrants(inherit, owner, selfSID, systemSID, adminSID)
 	acl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
 		return err
 	}
 	// PROTECTED_DACL disables inherited ACEs from parent directories (e.g. Users on %%TEMP%%).
-	return windows.SetNamedSecurityInfo(
+	err = windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		nil, nil, acl, nil,
 	)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func uniqueGrants(inherit uint32, sids ...*windows.SID) []windows.EXPLICIT_ACCESS {
+	out := make([]windows.EXPLICIT_ACCESS, 0, len(sids))
+	seen := make([]*windows.SID, 0, len(sids))
+	for _, sid := range sids {
+		if sid == nil {
+			continue
+		}
+		already := false
+		for _, s := range seen {
+			if s.Equals(sid) {
+				already = true
+				break
+			}
+		}
+		if already {
+			continue
+		}
+		seen = append(seen, sid)
+		out = append(out, explicitGrant(sid, inherit))
+	}
+	return out
+}
+
+func currentProcessUserSID() (*windows.SID, error) {
+	tok := windows.GetCurrentProcessToken()
+	tu, err := tok.GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	if tu.User.Sid == nil {
+		return nil, errors.New("no process user SID")
+	}
+	return tu.User.Sid.Copy()
 }
 
 func explicitGrant(sid *windows.SID, inherit uint32) windows.EXPLICIT_ACCESS {

@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestHardenPrivateFileWindowsACL(t *testing.T) {
@@ -22,6 +25,38 @@ func TestHardenPrivateFileWindowsACL(t *testing.T) {
 	if err := rejectBroadAllowACL(path); err != nil {
 		t.Fatal(err)
 	}
+	self, err := currentProcessUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !aclAllowsSID(path, self) {
+		t.Fatal("hardened ACL must grant the current process user (dedicated service account)")
+	}
+}
+
+func aclAllowsSID(path string, want *windows.SID) bool {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return false
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return false
+	}
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil || ace == nil {
+			continue
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if want.Equals(sid) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHardenPrivateDirWindowsACL(t *testing.T) {

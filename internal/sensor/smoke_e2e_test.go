@@ -50,7 +50,6 @@ func TestUnprivilegedSentinelTouchE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
 
 	tier := r.Watcher.Tier()
 	switch runtime.GOOS {
@@ -69,49 +68,39 @@ func TestUnprivilegedSentinelTouchE2E(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(3 * time.Second):
+		}
+		_ = r.Close()
+	}()
 
-	// Allow watcher to arm.
+	// Allow watcher to arm, then modify the decoy.
+	// Change-notification tiers (win-rdc, mac-fsevents) do not see plain reads;
+	// inotify/fanotify also observe writes, so modify works on all smoke platforms.
 	time.Sleep(300 * time.Millisecond)
-
-	switch runtime.GOOS {
-	case "windows":
-		// win-rdc sees modify/delete/rename, not plain reads.
-		f, err := os.OpenFile(decoy, os.O_APPEND|os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.WriteString("# touch\n"); err != nil {
-			_ = f.Close()
-			t.Fatal(err)
-		}
-		_ = f.Close()
-	default:
-		b, err := os.ReadFile(decoy)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(b) == 0 {
-			t.Fatal("empty decoy")
-		}
+	f, err := os.OpenFile(decoy, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if _, err := f.WriteString("# touch\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	_ = f.Close()
 
 	eventsPath := filepath.Join(dataDir, "events.jsonl")
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		st, err := os.Stat(eventsPath)
 		if err == nil && st.Size() > 0 {
-			cancel()
-			select {
-			case <-errCh:
-			case <-time.After(2 * time.Second):
-			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	cancel()
 	t.Fatalf("no events recorded under tier=%s (os=%s)", tier, runtime.GOOS)
 }
