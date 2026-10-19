@@ -1,6 +1,9 @@
 package forge_test
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,12 +169,35 @@ func TestForgeFolderOmitsUNCIconResource(t *testing.T) {
 	if !strings.HasSuffix(res.ArtifactPath, "-folder.zip") {
 		t.Fatalf("artifact %s", res.ArtifactPath)
 	}
-	body, err := os.ReadFile(res.ArtifactPath)
+	zr, err := zip.OpenReader(res.ArtifactPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.ToLower(string(body)), `iconresource=\\`) {
-		t.Fatal("folder zip must not contain UNC IconResource")
+	defer zr.Close()
+	foundDesktop := false
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(content))
+		if strings.Contains(lower, `iconresource=\\`) || strings.Contains(lower, "iconresource=\\\\") {
+			t.Fatalf("zip entry %s contains UNC IconResource", f.Name)
+		}
+		if strings.HasSuffix(strings.ToLower(f.Name), "desktop.ini") {
+			foundDesktop = true
+			if !bytes.Contains(content, []byte("[.ShellClassInfo]")) {
+				t.Fatalf("desktop.ini missing ShellClassInfo: %q", content)
+			}
+		}
+	}
+	if !foundDesktop {
+		t.Fatal("expected desktop.ini in folder zip")
 	}
 	notes, err := os.ReadFile(res.InstallPath)
 	if err != nil {
