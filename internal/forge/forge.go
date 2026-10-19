@@ -79,7 +79,7 @@ func Run(opt Options) (*Result, error) {
 		}
 	}
 
-	art, err := buildArtifact(opt.Type, opt.Name, defaultStr(opt.Theme, "devops"), httpsURL, dnsName)
+	art, err := buildArtifact(opt.Type, opt.Name, defaultStr(opt.Theme, "devops"), httpsURL, dnsName, platforms)
 	if err != nil {
 		return nil, err
 	}
@@ -164,11 +164,29 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	if m.BeaconDNS != "" {
 		b.WriteString(fmt.Sprintf("- beacon DNS: `%s`\n", m.BeaconDNS))
 	}
-	b.WriteString("\n## Place\n\nCopy the artifact to the intended path on an authorized host. Record the path in your case notes / memo.\n")
+	b.WriteString("\n## Place\n\n")
+	switch m.Type {
+	case "folder":
+		b.WriteString("Extract `" + filename + "` on an authorized host. Point the sentinel at the extracted folder " +
+			"(or at `secrets.env` inside). Record the path in your case notes / memo.\n")
+		b.WriteString("Kunari does **not** emit UNC `desktop.ini` IconResource beacons (NTLM risk). Prefer sentinel watch for folder browse.\n")
+	case "stub-exe":
+		b.WriteString("Extract `" + filename + "` and run the stub binary for the endpoint OS once in an authorized lab. " +
+			"It performs a single HTTPS GET to the beacon URL and exits. No persistence.\n")
+	default:
+		b.WriteString("Copy the artifact to the intended path on an authorized host. Record the path in your case notes / memo.\n")
+	}
 	b.WriteString("\n## Sentinel\n\n")
 	if m.Detect == "sentinel" || m.Detect == "both" {
+		watchPath := "/path/to/" + filename
+		if m.Type == "folder" {
+			watchPath = "/path/to/extracted-folder"
+		}
+		if m.Type == "stub-exe" {
+			watchPath = "/path/to/stub-binary"
+		}
 		b.WriteString("```bash\n")
-		b.WriteString("kunari sentinel init-config --path " + shellQuote("/path/to/"+filename) +
+		b.WriteString("kunari sentinel init-config --path " + shellQuote(watchPath) +
 			" --token " + shellQuote(m.TokenID) +
 			" --memo " + shellQuote(m.Memo) +
 			" --out sentinel.json\n")
@@ -183,6 +201,9 @@ func renderInstall(m *registry.Manifest, filename string) string {
 		}
 	} else {
 		b.WriteString("`--detect beacon` only: no host sensor required. Do not use `kunari package agent` for beacon-max deploys.\n")
+		if m.Type == "folder" {
+			b.WriteString("Folder browse without a sentinel usually will not alert; prefer `--detect both` or `sentinel` for folders.\n")
+		}
 	}
 	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) + "`\n")
 	return b.String()

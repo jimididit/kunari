@@ -76,6 +76,7 @@ func TestForgeAllBeaconTypesEmbedCollector(t *testing.T) {
 		{"docx", false},
 		{"xlsx", false},
 		{"pdf", true},
+		{"folder", true},
 	}
 	for _, tc := range types {
 		t.Run(tc.typ, func(t *testing.T) {
@@ -100,8 +101,10 @@ func TestForgeAllBeaconTypesEmbedCollector(t *testing.T) {
 			if !strings.Contains(string(man), collector) {
 				t.Fatalf("%s manifest missing collector host", tc.typ)
 			}
-			// Zip-backed Office formats deflate the lure; plaintext types keep /b/ in the file.
-			if tc.typ != "docx" && tc.typ != "xlsx" {
+			// Zip-backed formats deflate the lure; plaintext types keep /b/ in the file.
+			switch tc.typ {
+			case "docx", "xlsx", "folder":
+			default:
 				body, err := os.ReadFile(res.ArtifactPath)
 				if err != nil {
 					t.Fatal(err)
@@ -129,13 +132,6 @@ func TestForgeAllBeaconTypesEmbedCollector(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				body, err := os.ReadFile(res.ArtifactPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !strings.Contains(string(body), zone) {
-					t.Fatalf("%s dns-only artifact missing zone %s", tc.typ, zone)
-				}
 				man, err := os.ReadFile(res.ManifestPath)
 				if err != nil {
 					t.Fatal(err)
@@ -143,8 +139,85 @@ func TestForgeAllBeaconTypesEmbedCollector(t *testing.T) {
 				if !strings.Contains(string(man), zone) {
 					t.Fatalf("%s dns-only manifest missing zone", tc.typ)
 				}
+				if tc.typ != "folder" {
+					body, err := os.ReadFile(res.ArtifactPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(string(body), zone) {
+						t.Fatalf("%s dns-only artifact missing zone %s", tc.typ, zone)
+					}
+				}
 			})
 		}
+	}
+}
+
+func TestForgeFolderOmitsUNCIconResource(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "folder", Name: "hr-archive", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-FOLDER",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.ArtifactPath, "-folder.zip") {
+		t.Fatalf("artifact %s", res.ArtifactPath)
+	}
+	body, err := os.ReadFile(res.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(body)), `iconresource=\\`) {
+		t.Fatal("folder zip must not contain UNC IconResource")
+	}
+	notes, err := os.ReadFile(res.InstallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(notes), "Extract") || !strings.Contains(string(notes), "NTLM") {
+		t.Fatalf("install notes should explain extract + no UNC; got:\n%s", notes)
+	}
+}
+
+func TestForgeStubExeBuildsZip(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "stub-exe", Name: "healthcheck", Detect: "beacon",
+		Platforms: []string{"windows", "linux"},
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-STUB",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.ArtifactPath, "-stubs.zip") {
+		t.Fatalf("artifact %s", res.ArtifactPath)
+	}
+	man, err := os.ReadFile(res.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(man), "/b/") {
+		t.Fatal("stub manifest missing beacon https")
+	}
+	// Zip central directory should list both platform paths.
+	raw, err := os.ReadFile(res.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "windows-amd64/") || !strings.Contains(s, "linux-amd64/") {
+		t.Fatalf("stub zip missing platform entries; names in zip local headers may be plain: %q", s[:min(200, len(s))])
+	}
+	notes, err := os.ReadFile(res.InstallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(notes), "single HTTPS GET") {
+		t.Fatalf("install notes should describe stub behavior; got:\n%s", notes)
 	}
 }
 
