@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -137,12 +138,23 @@ func findField(block, label string) string {
 func mapAccessMask(mask string) string {
 	m := strings.ToLower(strings.TrimSpace(mask))
 	m = strings.TrimPrefix(m, "0x")
+	v, err := strconv.ParseUint(m, 16, 64)
+	if err != nil {
+		return "open"
+	}
+	// Bit tests, not substrings: SYNCHRONIZE is 0x100000 and must not match DELETE 0x10000.
+	const (
+		fileReadData  = 0x1
+		fileWriteData = 0x2
+		fileAppend    = 0x4
+		deleteAccess  = 0x10000
+	)
 	switch {
-	case strings.Contains(m, "10000"):
+	case v&deleteAccess != 0:
 		return "delete"
-	case m == "2":
+	case v&fileWriteData != 0 || v&fileAppend != 0:
 		return "modify"
-	case m == "1":
+	case v&fileReadData != 0:
 		return "read"
 	default:
 		return "open"
