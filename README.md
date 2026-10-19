@@ -91,7 +91,7 @@ curl -s -H "Authorization: Bearer $(tr -d '\n' < ./data/api.token)" \
   'http://127.0.0.1:8080/api/v1/events?after_seq=0&limit=50'
 ```
 
-More detail: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md).
+More detail: [examples/lab-hub](examples/lab-hub/README.md), [examples/docker](examples/docker/README.md), [examples/tls-hub](examples/tls-hub/README.md) (Caddy/nginx in front of the hub).
 
 ## Commands
 
@@ -121,21 +121,28 @@ Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Ne
 | `GET /api/v1/tokens` | Bearer / `X-Kunari-API-Key` | Registry inventory (no signatures) |
 | `POST /api/v1/tokens/{id}/revoke` | Bearer / `X-Kunari-API-Key` | Revoke a forged token |
 
-Behind a TLS terminator:
+Behind a TLS terminator (required for realistic off-host HTTPS beacons):
 
 ```bash
 kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
+Copy-paste Caddy and nginx configs: [examples/tls-hub](examples/tls-hub/README.md).
+
 ## How detection works
 
 Kunari has two layers. You can use either or both on an authorized host.
 
+| Deploy model | On the endpoint | What you get |
+|---|---|---|
+| **Beacon-max** | Decoy file(s) only | Alerts when something fetches the embedded HTTPS/DNS lure. No local FS watcher. |
+| **Agent** | Decoy + `kunari package agent` / sentinel | Best-effort open/read/modify (tier varies by OS and privilege), plus beacons if forged with `--detect both`. |
+
 1. **Beacon** - A forged decoy that contacts your hub over HTTPS or DNS when something uses it in a way that triggers the embedded beacon. The decoy file can sit alone on the endpoint; forge and hub stay on your infrastructure. This does not see every filesystem touch - only those network fetches.
 2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). Forge with `--detect both` if you want beacon and sentinel together.
 
-Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub (not `127.0.0.1`). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
+Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub hostname (not `127.0.0.1`) and terminate TLS in front of the hub ([examples/tls-hub](examples/tls-hub/README.md)). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 
 To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), use `kunari package agent` after forging; put a matching release binary in the package `bin/` directory, then run the generated install script on the endpoint. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - `kunari.exe` is not a Windows Service binary.
 
@@ -143,7 +150,9 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.3.0** is the current release: hub operator UI (`/ui/`), authenticated status/tokens APIs, and sentinel OPSEC basics (private config modes, quieter logs, deploy guidance).
+**v0.3.0** is the current release tag: hub operator UI (`/ui/`), authenticated status/tokens APIs, and sentinel OPSEC basics.
+
+`main` also includes `kunari package agent` (per-OS endpoint bundle) and TLS reverse-proxy examples for beacon-max collectors. Tag **v0.4.0** when you want those in a release archive.
 
 ## Contributing
 

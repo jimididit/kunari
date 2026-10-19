@@ -39,12 +39,13 @@ Fixes are prioritized by severity and exploitability.
 - Deploy Kunari only on systems you own or are authorized to monitor.
 - Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts and public repos.
 - SSE `?token=` is for legacy `EventSource` clients only; tokens in query strings can appear in reverse-proxy access logs. Prefer `Authorization: Bearer` when the client can set headers. The embedded hub `/ui/` console streams SSE with Bearer via `fetch` (no query token).
-- Put the hub behind TLS (reverse proxy). Use `--trusted-proxy` only for terminators you control.
+- Put the hub behind TLS (reverse proxy). Use `--trusted-proxy` only for terminators you control. See [examples/tls-hub](examples/tls-hub/README.md) for Caddy and nginx recipes.
+- For beacon-max (decoy-only) collectors, forge with a public `https://` hostname that hits that terminator - not the hub's loopback listen address.
 
 ## Beacon vs sentinel
 
-- **Beacon-only:** decoy files on the endpoint; alerts depend on a network fetch to your hub. Not a substitute for filesystem watching.
-- **Sentinel:** local `kunari sentinel` process required for open/read/modify (per OS tier). Prefer `--detect both` so beacons remain if the sentinel is stopped.
+- **Beacon-max / beacon-only:** decoy files on the endpoint; alerts depend on a network fetch to your hub. Not a substitute for filesystem watching.
+- **Agent / sentinel:** local `kunari sentinel` (or `kunari package agent`) required for open/read/modify (per OS tier). Prefer `--detect both` so beacons remain if the sentinel is stopped.
 - Do not describe beacon-only deployments as providing sentinel-equivalent coverage.
 
 ## Sentinel and local attackers

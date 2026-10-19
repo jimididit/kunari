@@ -1,0 +1,28 @@
+# Kunari hub TLS terminator (nginx site snippet).
+# Replace paths, server_name, and certificate paths. Authorized use only.
+#
+# Hub must listen on 127.0.0.1:8080 with:
+#   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+
+server {
+    listen 443 ssl http2;
+    server_name beacon.example.com;
+
+    ssl_certificate     /etc/ssl/certs/beacon.example.com.fullchain.pem;
+    ssl_certificate_key /etc/ssl/private/beacon.example.com.key;
+
+    # Optional: HSTS after you confirm HTTPS works end-to-end.
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # SSE / long-lived operator streams
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}

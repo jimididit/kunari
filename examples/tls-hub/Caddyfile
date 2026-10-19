@@ -1,0 +1,16 @@
+# Kunari hub TLS terminator (Caddy).
+# Replace beacon.example.com with your hostname. Authorized use only.
+#
+# Hub must listen on 127.0.0.1:8080 with:
+#   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+
+beacon.example.com {
+	encode gzip
+
+	# Forward real client address to the hub (only safe because hub trusts 127.0.0.1).
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}
