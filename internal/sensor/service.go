@@ -47,9 +47,10 @@ WantedBy=multi-user.target
 # kunari.exe is not a Windows Service binary; prefer Register-ScheduledTask
 # (see kunari package agent install.ps1) or a wrapper such as NSSM/WinSW.
 # Restrict NTFS ACL on the config and data directory to SYSTEM + Administrators.
-# Prefer a small .cmd wrapper that sets KUNARI_SENTINEL_CONFIG=%s then runs:
-#   kunari.exe sentinel run
-# (avoids putting the config path on process argv). See package agent install.ps1.
+# Prefer a .cmd wrapper that sets KUNARI_SENTINEL_CONFIG then runs: kunari.exe sentinel run
+# Example (config path for the wrapper's set line): %s
+# $runner = 'C:\ProgramData\KunariAgent\bin\run-sentinel.cmd'
+# $a = New-ScheduledTaskAction -Execute $runner
 # $t = New-ScheduledTaskTrigger -AtStartup
 # $p = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest
 # Register-ScheduledTask -TaskName KunariSentinel -Action $a -Trigger $t -Principal $p -Force
