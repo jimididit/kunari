@@ -74,7 +74,16 @@ Requires certificates you already have (Let's Encrypt, internal CA, etc.).
 
 ## Forge for beacon-max
 
-Use the public HTTPS origin (not the loopback listen address):
+Use the public HTTPS origin (not the loopback listen address). Place only the forged artifact on the endpoint. Keep hub data, signing keys, and `ingest.secret` on infrastructure you control.
+
+| Type | HTTPS `--collector` | DNS `--collector-dns` | Lure shape |
+|---|---|---|---|
+| `env` | optional if DNS set | optional if HTTPS set | `HEALTHCHECK_URL` / `METRICS_HOST` |
+| `svg` / `html` | required | not embedded | zero-size image / 1x1 img |
+| `docx` / `xlsx` | required | not embedded | OOXML external image relationship |
+| `pdf` | optional if DNS set | optional if HTTPS set | link annotation; DNS-only uses `https://<name>/` |
+
+Env (secrets-looking lure):
 
 ```bash
 kunari forge --type env --name app-secrets --detect beacon \
@@ -83,9 +92,25 @@ kunari forge --type env --name app-secrets --detect beacon \
   --out ./dist --key ./data/signing.key --registry ./data/registry.db
 ```
 
-Optional DNS beacons: set `--collector-dns` to a zone you control that resolves queries into the hub DNS collector (separate from this TLS proxy).
+Office document (external image fetch when the client resolves it):
 
-Place only the forged artifact on the endpoint. Keep hub data, signing keys, and `ingest.secret` on infrastructure you control.
+```bash
+kunari forge --type docx --name q3-budget --detect beacon \
+  --collector https://beacon.example.com \
+  --memo "authorized lab" --authz-ref "LAB-BEACON-002" \
+  --out ./dist --key ./data/signing.key --registry ./data/registry.db
+```
+
+PDF link annotation:
+
+```bash
+kunari forge --type pdf --name vendor-invoice --detect beacon \
+  --collector https://beacon.example.com \
+  --memo "authorized lab" --authz-ref "LAB-BEACON-003" \
+  --out ./dist --key ./data/signing.key --registry ./data/registry.db
+```
+
+Optional DNS channel: set `--collector-dns` to a zone you control and wire the hub with `--dns-listen` / `--dns-zone`. See [../dns-hub](../dns-hub/README.md). That path is separate from this TLS proxy.
 
 ## Smoke checks
 

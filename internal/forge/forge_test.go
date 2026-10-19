@@ -63,6 +63,91 @@ func TestForgeSVG(t *testing.T) {
 	}
 }
 
+func TestForgeAllBeaconTypesEmbedCollector(t *testing.T) {
+	collector := "https://beacon.example.com"
+	zone := "canary.example.invalid"
+	types := []struct {
+		typ       string
+		dnsOnlyOK bool
+	}{
+		{"env", true},
+		{"svg", false},
+		{"html", false},
+		{"docx", false},
+		{"xlsx", false},
+		{"pdf", true},
+	}
+	for _, tc := range types {
+		t.Run(tc.typ, func(t *testing.T) {
+			dir := t.TempDir()
+			opt := forge.Options{
+				Type: tc.typ, Name: "lab-" + tc.typ, Detect: "beacon",
+				Collector: collector, AuthzRef: "LAB-BEACON",
+				OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+				RegistryDB: filepath.Join(dir, "reg.db"),
+			}
+			res, err := forge.Run(opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			man, err := os.ReadFile(res.ManifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(man), "/b/") {
+				t.Fatalf("%s manifest missing beacon https path", tc.typ)
+			}
+			if !strings.Contains(string(man), collector) {
+				t.Fatalf("%s manifest missing collector host", tc.typ)
+			}
+			// Zip-backed Office formats deflate the lure; plaintext types keep /b/ in the file.
+			if tc.typ != "docx" && tc.typ != "xlsx" {
+				body, err := os.ReadFile(res.ArtifactPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(body), "/b/") {
+					t.Fatalf("%s artifact missing HTTPS beacon path", tc.typ)
+				}
+			}
+			lint, err := forge.LintFile(res.ArtifactPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(lint.Findings) != 0 {
+				t.Fatalf("%s lint findings: %+v", tc.typ, lint.Findings)
+			}
+		})
+		if tc.dnsOnlyOK {
+			t.Run(tc.typ+"/dns-only", func(t *testing.T) {
+				dir := t.TempDir()
+				res, err := forge.Run(forge.Options{
+					Type: tc.typ, Name: "dns-" + tc.typ, Detect: "beacon",
+					CollectorDNS: zone, AuthzRef: "LAB-DNS",
+					OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(res.ArtifactPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(body), zone) {
+					t.Fatalf("%s dns-only artifact missing zone %s", tc.typ, zone)
+				}
+				man, err := os.ReadFile(res.ManifestPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(man), zone) {
+					t.Fatalf("%s dns-only manifest missing zone", tc.typ)
+				}
+			})
+		}
+	}
+}
+
 func TestInstallNotesDualLayerGuidance(t *testing.T) {
 	dir := t.TempDir()
 	res, err := forge.Run(forge.Options{
