@@ -43,7 +43,7 @@ go install github.com/jimididit/kunari/cmd/kunari@latest
 kunari self-test
 ```
 
-Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.5.0`.
+Pin a release if you prefer: `go install github.com/jimididit/kunari/cmd/kunari@v0.5.1`.
 
 **From a clone** (local `bin/` keeps the binary out of the repo root; that directory is gitignored):
 
@@ -150,7 +150,7 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.5.0** is the current release: hostile-local OPSEC P0 (quieter logs, `KUNARI_SENTINEL_CONFIG`, Windows ACL fail-closed), hub missing-agent heartbeat watch, dual-layer pack guidance, plus v0.4 agent package and TLS hub recipes.
+**v0.5.1** is the current release: Windows SACL 4663 action labels + path-filtered Security log query, fanotify mask priority, beacon-max DNS hub recipe, `folder`/`stub-exe` forge types (folder materializes a dir; watch `secrets.env`), plus v0.5.0 OPSEC P0 / missing-agent / dual-layer pack guidance.
 
 ## Contributing
 
