@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 )
 
-// buildFolder returns a zip of a decoy directory for sentinel watch.
-// It embeds an env-style beacon file. UNC desktop.ini IconResource is
-// intentionally omitted (ADR-0005 / NTLM risk).
+// buildFolder returns a portable zip plus DirFiles so forge can materialize
+// a real directory under --out. Prefer sentinel watch on secrets.env (file
+// open/read/modify). Directory browse is weaker and tier-dependent.
+// UNC desktop.ini IconResource is omitted (ADR-0005 / NTLM risk).
 func buildFolder(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 	if httpsURL == "" && dnsName == "" {
 		return nil, fmt.Errorf("folder requires --collector and/or --collector-dns (for the inner secrets.env)")
@@ -23,24 +24,35 @@ func buildFolder(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 	}
 	readme := "AUTHORIZED TRIPWIRE FOLDER - not a real secrets store.\n\n" +
 		themeFiller(theme, name) +
-		"\nPlace this folder on an authorized host and point kunari sentinel at it\n" +
-		"(or at secrets.env inside). Opening the folder alone may not beacon.\n" +
+		"\nRecommended: point kunari sentinel at secrets.env in this folder\n" +
+		"(same open/read/modify behavior as a normal env decoy).\n" +
+		"Watching the directory path is weaker: folder browse/list detection\n" +
+		"varies by OS tier and is not equivalent to watching a file.\n" +
 		"Windows UNC desktop.ini IconResource beacons are omitted on purpose\n" +
-		"(NTLM / credential-coercion risk). Prefer sentinel watch.\n"
+		"(NTLM / credential-coercion risk).\n"
 	// Harmless ShellClassInfo only - no IconResource=\\ host.
 	desktop := "[.ShellClassInfo]\r\nConfirmFileOp=0\r\n" +
 		"InfoTip=Authorized tripwire folder - contact your security team\r\n"
 
-	files := map[string][]byte{
-		dirName + "/README.txt":   []byte(readme),
-		dirName + "/secrets.env":  envArt.Content,
-		dirName + "/desktop.ini":  []byte(desktop),
+	dirFiles := map[string][]byte{
+		"README.txt":  []byte(readme),
+		"secrets.env": envArt.Content,
+		"desktop.ini": []byte(desktop),
 	}
-	z, err := zipBytes(files)
+	zipMap := make(map[string][]byte, len(dirFiles))
+	for rel, content := range dirFiles {
+		zipMap[dirName+"/"+rel] = content
+	}
+	z, err := zipBytes(zipMap)
 	if err != nil {
 		return nil, err
 	}
-	return &Artifact{Filename: dirName + "-folder.zip", Content: z}, nil
+	return &Artifact{
+		Filename: dirName + "-folder.zip",
+		Content:  z,
+		DirName:  dirName,
+		DirFiles: dirFiles,
+	}, nil
 }
 
 // buildStubExe cross-compiles a harmless stub that GETs the HTTPS beacon once and exits.
