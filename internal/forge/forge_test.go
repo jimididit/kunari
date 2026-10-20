@@ -199,12 +199,30 @@ func TestForgeFolderOmitsUNCIconResource(t *testing.T) {
 	if !foundDesktop {
 		t.Fatal("expected desktop.ini in folder zip")
 	}
+	if res.DirPath == "" {
+		t.Fatal("expected materialized directory path")
+	}
+	secrets := filepath.Join(res.DirPath, "secrets.env")
+	if _, err := os.Stat(secrets); err != nil {
+		t.Fatalf("materialized secrets.env: %v", err)
+	}
+	body, err := os.ReadFile(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "/b/") {
+		t.Fatal("materialized secrets.env missing HTTPS beacon")
+	}
 	notes, err := os.ReadFile(res.InstallPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(notes), "Extract") || !strings.Contains(string(notes), "NTLM") {
-		t.Fatalf("install notes should explain extract + no UNC; got:\n%s", notes)
+	text := string(notes)
+	if !strings.Contains(text, "secrets.env") || !strings.Contains(text, "NTLM") {
+		t.Fatalf("install notes should recommend secrets.env and mention NTLM; got:\n%s", text)
+	}
+	if !strings.Contains(text, "weaker") && !strings.Contains(text, "not equivalent") {
+		t.Fatalf("install notes should say directory watch is weaker; got:\n%s", text)
 	}
 }
 

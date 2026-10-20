@@ -3,6 +3,7 @@
 .specstory/
 .cursorindexingignore
 graphify-out/
+.vscode/
 
 # Prior-art scratch clones (never ship)
 .scratch/

@@ -11,6 +11,9 @@ import (
 type Artifact struct {
 	Filename string
 	Content  []byte
+	// DirName, when set, is also written under OutDir with DirFiles (folder type).
+	DirName  string
+	DirFiles map[string][]byte // paths relative to DirName
 }
 
 func buildArtifact(itemType, name, theme, httpsURL, dnsName string, platforms []string) (*Artifact, error) {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/jimididit/kunari/internal/forge"
@@ -74,6 +75,10 @@ func newForgeCmd() *cobra.Command {
 			}
 			fmt.Printf("token_id:  %s\n", res.TokenID)
 			fmt.Printf("artifact:  %s\n", res.ArtifactPath)
+			if res.DirPath != "" {
+				fmt.Printf("directory: %s\n", res.DirPath)
+				fmt.Printf("watch:     %s\n", filepath.Join(res.DirPath, "secrets.env"))
+			}
 			fmt.Printf("manifest:  %s\n", res.ManifestPath)
 			fmt.Printf("install:   %s\n", res.InstallPath)
 			fmt.Println(authorizedUse)

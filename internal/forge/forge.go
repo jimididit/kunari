@@ -18,6 +18,7 @@ type Result struct {
 	ManifestPath string
 	ArtifactPath string
 	InstallPath  string
+	DirPath      string // materialized folder directory (type=folder), else empty
 	TokenID      string
 }
 
@@ -92,6 +93,10 @@ func Run(opt Options) (*Result, error) {
 	if err := os.WriteFile(artPath, art.Content, 0o600); err != nil {
 		return nil, err
 	}
+	dirPath, err := materializeDir(opt.OutDir, art)
+	if err != nil {
+		return nil, err
+	}
 
 	m := &registry.Manifest{
 		TokenID:        tokenID,
@@ -125,7 +130,7 @@ func Run(opt Options) (*Result, error) {
 		return nil, err
 	}
 
-	install := renderInstall(m, art.Filename)
+	install := renderInstall(m, art.Filename, art.DirName)
 	instPath := filepath.Join(opt.OutDir, sanitizeName(opt.Name)+".INSTALL.md")
 	if err := os.WriteFile(instPath, []byte(install), 0o600); err != nil {
 		return nil, err
@@ -146,11 +151,40 @@ func Run(opt Options) (*Result, error) {
 		ManifestPath: manPath,
 		ArtifactPath: artPath,
 		InstallPath:  instPath,
+		DirPath:      dirPath,
 		TokenID:      tokenID,
 	}, nil
 }
 
-func renderInstall(m *registry.Manifest, filename string) string {
+func materializeDir(outDir string, art *Artifact) (string, error) {
+	if art == nil || art.DirName == "" || len(art.DirFiles) == 0 {
+		return "", nil
+	}
+	root := filepath.Join(outDir, art.DirName)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	for rel, content := range art.DirFiles {
+		rel = filepath.Clean(rel)
+		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			return "", fmt.Errorf("invalid folder entry %q", rel)
+		}
+		dst := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return "", err
+		}
+		mode := os.FileMode(0o600)
+		if strings.EqualFold(filepath.Base(rel), "desktop.ini") {
+			mode = 0o644
+		}
+		if err := os.WriteFile(dst, content, mode); err != nil {
+			return "", err
+		}
+	}
+	return root, nil
+}
+
+func renderInstall(m *registry.Manifest, filename, dirName string) string {
 	var b strings.Builder
 	b.WriteString("# Kunari tripwire install notes\n\n")
 	b.WriteString("**Authorized use only.** " + registry.AuthorizedUseNotice + "\n\n")
@@ -167,9 +201,15 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	b.WriteString("\n## Place\n\n")
 	switch m.Type {
 	case "folder":
-		b.WriteString("Extract `" + filename + "` on an authorized host. Point the sentinel at the extracted folder " +
-			"(or at `secrets.env` inside). Record the path in your case notes / memo.\n")
-		b.WriteString("Kunari does **not** emit UNC `desktop.ini` IconResource beacons (NTLM risk). Prefer sentinel watch for folder browse.\n")
+		if dirName == "" {
+			dirName = "decoy-folder"
+		}
+		b.WriteString("Forge writes both `" + filename + "` (portable zip) and a materialized directory `" + dirName + "/` under `--out`.\n")
+		b.WriteString("Copy the directory (or extract the zip) onto an authorized host.\n")
+		b.WriteString("**Recommended sentinel target:** `" + dirName + "/secrets.env` - same open/read/modify behavior as a normal env decoy.\n")
+		b.WriteString("Watching the directory path itself is weaker: browse/list detection is tier-dependent and not equivalent to watching a file.\n")
+		b.WriteString("Kunari does **not** emit UNC `desktop.ini` IconResource beacons (NTLM risk).\n")
+		b.WriteString("For `kunari package agent`, pass the `secrets.env` file path (agent packs require a file decoy today).\n")
 	case "stub-exe":
 		b.WriteString("Extract `" + filename + "` and run the stub binary for the endpoint OS once in an authorized lab. " +
 			"It performs a single HTTPS GET to the beacon URL and exits. No persistence.\n")
@@ -180,7 +220,10 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	if m.Detect == "sentinel" || m.Detect == "both" {
 		watchPath := "/path/to/" + filename
 		if m.Type == "folder" {
-			watchPath = "/path/to/extracted-folder"
+			if dirName == "" {
+				dirName = "decoy-folder"
+			}
+			watchPath = "/path/to/" + dirName + "/secrets.env"
 		}
 		if m.Type == "stub-exe" {
 			watchPath = "/path/to/stub-binary"
@@ -202,7 +245,7 @@ func renderInstall(m *registry.Manifest, filename string) string {
 	} else {
 		b.WriteString("`--detect beacon` only: no host sensor required. Do not use `kunari package agent` for beacon-max deploys.\n")
 		if m.Type == "folder" {
-			b.WriteString("Folder browse without a sentinel usually will not alert; prefer `--detect both` or `sentinel` for folders.\n")
+			b.WriteString("Folder browse without a sentinel usually will not alert; prefer `--detect both` and watch `secrets.env`.\n")
 		}
 	}
 	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) + "`\n")
