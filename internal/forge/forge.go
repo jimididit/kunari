@@ -160,16 +160,29 @@ func materializeDir(outDir string, art *Artifact) (string, error) {
 	if art == nil || art.DirName == "" || len(art.DirFiles) == 0 {
 		return "", nil
 	}
-	root := filepath.Join(outDir, art.DirName)
+	if err := validateRelName(art.DirName); err != nil {
+		return "", fmt.Errorf("folder dir name: %w", err)
+	}
+	outAbs, err := filepath.Abs(outDir)
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(outAbs, art.DirName)
+	if !underDir(outAbs, root) {
+		return "", fmt.Errorf("folder dir %q escapes output directory", art.DirName)
+	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", err
 	}
 	for rel, content := range art.DirFiles {
-		rel = filepath.Clean(rel)
-		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			return "", fmt.Errorf("invalid folder entry %q", rel)
+		rel = filepath.ToSlash(filepath.Clean(rel))
+		if err := validateRelName(rel); err != nil {
+			return "", fmt.Errorf("folder entry: %w", err)
 		}
-		dst := filepath.Join(root, rel)
+		dst := filepath.Join(root, filepath.FromSlash(rel))
+		if !underDir(root, dst) {
+			return "", fmt.Errorf("folder entry %q escapes directory", rel)
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return "", err
 		}
@@ -182,6 +195,37 @@ func materializeDir(outDir string, art *Artifact) (string, error) {
 		}
 	}
 	return root, nil
+}
+
+// validateRelName rejects absolute paths, empty names, and any ".." segment.
+func validateRelName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." {
+		return fmt.Errorf("empty path")
+	}
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return fmt.Errorf("absolute path %q", name)
+	}
+	clean := filepath.ToSlash(filepath.Clean(name))
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("path escapes parent %q", name)
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == ".." {
+			return fmt.Errorf("path escapes parent %q", name)
+		}
+	}
+	return nil
+}
+
+func underDir(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if parent == child {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(child, parent+sep)
 }
 
 func renderInstall(m *registry.Manifest, filename, dirName string) string {
