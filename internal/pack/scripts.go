@@ -5,18 +5,25 @@ import (
 	"strings"
 )
 
-func linuxInstall(prefix, binName string) string {
+func linuxInstall(prefix, binName, unitName string) string {
 	pq := shQuote(prefix)
 	bq := shQuote(binName)
+	uq := shQuote(unitName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Kunari agent install (Linux). Authorized use only.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
 BIN_NAME=%s
+UNIT_NAME=%s
+UNIT_FILE="$UNIT_NAME.service"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
+  exit 1
+fi
+if [[ ! -f "$ROOT/$UNIT_FILE" ]]; then
+  echo "error: missing $UNIT_FILE in package root" >&2
   exit 1
 fi
 if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret"; then
@@ -35,11 +42,16 @@ install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 -o kunari -g kunari "$ROOT/decoys/"* "$PREFIX/decoys/"
-install -m 0644 "$ROOT/kunari-sentinel.service" /etc/systemd/system/kunari-sentinel.service
+# Remove legacy default unit when operators rename persistence.
+if [[ "$UNIT_NAME" != "kunari-sentinel" ]] && [[ -f /etc/systemd/system/kunari-sentinel.service ]]; then
+  systemctl disable --now kunari-sentinel.service 2>/dev/null || true
+  rm -f /etc/systemd/system/kunari-sentinel.service
+fi
+install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
 systemctl daemon-reload
-systemctl enable --now kunari-sentinel.service
-echo "installed under $PREFIX; service kunari-sentinel started"
-`, pq, bq)
+systemctl enable --now "$UNIT_FILE"
+echo "installed under $PREFIX; service $UNIT_NAME started"
+`, pq, bq, uq)
 }
 
 func linuxUnit(prefix, binName string) string {
@@ -65,18 +77,25 @@ WantedBy=multi-user.target
 `, cfg, bin)
 }
 
-func darwinInstall(prefix, binName string) string {
+func darwinInstall(prefix, binName, unitName string) string {
 	pq := shQuote(prefix)
 	bq := shQuote(binName)
+	uq := shQuote(unitName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Kunari agent install (macOS). Authorized use only. Prefer a dedicated operator account.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
 BIN_NAME=%s
+UNIT_NAME=%s
+PLIST_SRC="$ROOT/$UNIT_NAME.plist"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
+  exit 1
+fi
+if [[ ! -f "$PLIST_SRC" ]]; then
+  echo "error: missing $UNIT_NAME.plist in package root" >&2
   exit 1
 fi
 if [[ ! -s "$ROOT/etc/ingest.secret" ]] || grep -q '^#' "$ROOT/etc/ingest.secret"; then
@@ -88,18 +107,22 @@ install -m 0755 "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 "$ROOT/decoys/"* "$PREFIX/decoys/"
-PLIST_DST="/Library/LaunchDaemons/com.jimididit.kunari-sentinel.plist"
-install -m 0644 "$ROOT/com.jimididit.kunari-sentinel.plist" "$PLIST_DST"
-launchctl bootout system/com.jimididit.kunari-sentinel 2>/dev/null || true
+PLIST_DST="/Library/LaunchDaemons/$UNIT_NAME.plist"
+if [[ "$UNIT_NAME" != "com.jimididit.kunari-sentinel" ]]; then
+  launchctl bootout system/com.jimididit.kunari-sentinel 2>/dev/null || true
+  rm -f /Library/LaunchDaemons/com.jimididit.kunari-sentinel.plist
+fi
+install -m 0644 "$PLIST_SRC" "$PLIST_DST"
+launchctl bootout "system/$UNIT_NAME" 2>/dev/null || true
 launchctl bootstrap system "$PLIST_DST"
-launchctl enable system/com.jimididit.kunari-sentinel
-launchctl kickstart -k system/com.jimididit.kunari-sentinel
-echo "installed under $PREFIX; launchd job started"
+launchctl enable "system/$UNIT_NAME"
+launchctl kickstart -k "system/$UNIT_NAME"
+echo "installed under $PREFIX; launchd job $UNIT_NAME started"
 echo "Note: Full Disk Access may be required for stronger macOS tiers."
-`, pq, bq)
+`, pq, bq, uq)
 }
 
-func darwinPlist(prefix, binName string) string {
+func darwinPlist(prefix, binName, unitName string) string {
 	bin := targetJoin("darwin", prefix, "bin", binName)
 	cfg := targetJoin("darwin", prefix, "etc", "sentinel.json")
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -107,7 +130,7 @@ func darwinPlist(prefix, binName string) string {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.jimididit.kunari-sentinel</string>
+  <string>%s</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>KUNARI_SENTINEL_CONFIG</key>
@@ -125,19 +148,21 @@ func darwinPlist(prefix, binName string) string {
   <true/>
 </dict>
 </plist>
-`, cfg, bin)
+`, unitName, cfg, bin)
 }
 
-func windowsInstall(prefix, binName string) string {
+func windowsInstall(prefix, binName, unitName string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
+	b := strings.ReplaceAll(binName, `'`, `''`)
+	u := strings.ReplaceAll(unitName, `'`, `''`)
 	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
-# kunari.exe is not a Windows Service binary; install uses a SYSTEM scheduled task.
+# The package binary is not a Windows Service; install uses a SYSTEM scheduled task.
 # Prefer ScheduledTasks cmdlets over schtasks.exe to avoid native stderr/quote pitfalls under $ErrorActionPreference=Stop.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
 $BinName = '%s'
-$TaskName = 'KunariSentinel'
+$TaskName = '%s'
 $ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
@@ -156,9 +181,11 @@ if ($svc) {
   $null = cmd.exe /c 'sc.exe delete KunariSentinel >nul 2>&1'
   Start-Sleep -Seconds 1
 }
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+foreach ($tn in @($TaskName, 'KunariSentinel') | Select-Object -Unique) {
+  if (Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
+  }
 }
 Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
@@ -195,5 +222,5 @@ if (-not (Get-Process -Name $ProcName -ErrorAction SilentlyContinue)) {
   throw ("scheduled task {0} was created but process {1} is not running; check Task Scheduler history" -f $TaskName, $ProcName)
 }
 Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, AtStartup)"
-`, p, binName)
+`, p, b, u)
 }

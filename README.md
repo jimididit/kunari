@@ -144,7 +144,7 @@ Kunari has two layers. You can use either or both on an authorized host.
 
 Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub hostname (not `127.0.0.1`) and terminate TLS in front of the hub ([examples/tls-hub](examples/tls-hub/README.md)). Optional DNS beacons use `--collector-dns` with a zone you control ([examples/dns-hub](examples/dns-hub/README.md)). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 
-To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), forge with `--detect both`, then `kunari package agent`; put a matching release binary in the package `bin/` directory, then run the generated install script on the endpoint. The package `DEPLOY.md` repeats dual-layer guidance. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - `kunari.exe` is not a Windows Service binary.
+To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), forge with `--detect both`, then `kunari package agent`; put a matching release binary in the package `bin/` directory (rename it if you pass `--binary-name`), then run the generated install script on the endpoint. Optional packaging knobs: `--binary-name`, `--unit-name` (systemd / launchd / scheduled task), `--prefix`. Well-known OS process and service names are denied. The package `DEPLOY.md` repeats dual-layer guidance. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - the package binary is not a Windows Service binary.
 
 Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 

@@ -66,5 +66,5 @@ Practical guidance:
 - Prefer forge `--detect both` (dual-layer): HTTPS/DNS beacons can still fire if the sentinel process is killed. Avoid agent-only when the threat includes a hostile local admin.
 - With hub push configured, sentinels send heartbeats; the hub alerts `agent_missing` when a known agent is silent longer than `--agent-stale-after` (default 3m). This does not stop a local admin from killing the process - it shortens time-to-notice.
 - Beacon-max (decoy only, no agent) has the smallest process footprint but does not watch the filesystem - see [examples/tls-hub](examples/tls-hub/README.md).
-- Do not rename the binary to impersonate OS components (`svchost`, `systemd`, …). That is out of scope and harms incident response clarity.
+- Optional `kunari package agent --binary-name` / `--unit-name` / `--prefix` reduce unique Kunari strings for authorized deploys. The packager **denies** well-known OS process and service names (`svchost`, `lsass`, `systemd`, `sshd`, …). Impersonating OS components remains out of scope and harms incident response clarity.
 - Do not expect invisibility from a determined local admin.
