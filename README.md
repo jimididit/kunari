@@ -36,7 +36,7 @@ Pick one:
 
 **Release binaries** (recommended): download the archive for your OS/arch from [Releases](https://github.com/jimididit/kunari/releases), extract, and put `kunari` on your `PATH`. Verify with `checksums.txt` (Syft SBOMs + cosign signature on the checksum file are attached to the same release).
 
-**With Go** (Go 1.26.9+; cross-platform):
+**With Go** (Go 1.26.10+; cross-platform):
 
 ```bash
 go install github.com/jimididit/kunari/cmd/kunari@latest
