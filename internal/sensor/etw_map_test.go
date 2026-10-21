@@ -29,10 +29,30 @@ func TestETWPathMatches(t *testing.T) {
 		t.Fatal("exact match")
 	}
 	if !etwPathMatches(`\device\harddiskvolume3\programdata\kunariagent\decoys\bait.env`, target) {
-		t.Fatal("device suffix match")
+		t.Fatal("device path with drive-stripped suffix")
 	}
 	if etwPathMatches(`C:\other\file.env`, target) {
 		t.Fatal("should not match other path")
+	}
+	// Must not treat a full Win32 target as a free suffix (lookalike volume path).
+	if etwPathMatches(`D:\backup\C:\ProgramData\KunariAgent\decoys\bait.env`, target) {
+		t.Fatal("should not suffix-match a nested drive string")
+	}
+	// Mid-component: \myprogramdata\... must not match \programdata\...
+	if etwPathMatches(`\device\harddiskvolume3\myprogramdata\kunariagent\decoys\bait.env`, target) {
+		t.Fatal("should not match mid-component suffix")
+	}
+}
+
+func TestETWHasPathSuffix(t *testing.T) {
+	if !etwHasPathSuffix(`\vol\data\file`, `\data\file`) {
+		t.Fatal("want boundary match")
+	}
+	if etwHasPathSuffix(`\vol\mydata\file`, `\data\file`) {
+		t.Fatal("mid-component must fail")
+	}
+	if !etwHasPathSuffix(`\data\file`, `\data\file`) {
+		t.Fatal("exact")
 	}
 }
 

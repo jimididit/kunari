@@ -25,7 +25,10 @@ var kernelFileProviderGUID = windows.GUID{
 	Data4: [8]byte{0xb9, 0x70, 0xc2, 0x56, 0x0f, 0xb5, 0xc2, 0x89},
 }
 
-const etwSessionName = "KunariKernelFile"
+const (
+	etwSessionName = "KunariKernelFile"
+	etwMaxObjCache = 256
+)
 
 type etwWatcher struct {
 	targets []Target
@@ -34,7 +37,7 @@ type etwWatcher struct {
 	paths   *ntPathResolver
 
 	mu     sync.Mutex
-	byObj  map[string]string // FileObject/FileKey -> last known path
+	byObj  map[string]string // FileObject/FileKey -> path (matched targets only)
 	closed bool
 }
 
@@ -108,12 +111,22 @@ func (w *etwWatcher) Close() error {
 }
 
 func (w *etwWatcher) Run(ctx context.Context, out chan<- Touch) error {
-	if w.session == nil {
+	// Snapshot the session under the lock so Close cannot nil the pointer
+	// between the nil-check and Process.
+	w.mu.Lock()
+	session := w.session
+	closed := w.closed
+	w.mu.Unlock()
+	if closed || session == nil {
 		return fmt.Errorf("etw session not started")
 	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		err := w.session.Process(func(e *etw.Event) {
+		err := session.Process(func(e *etw.Event) {
+			if w.isClosed() {
+				return
+			}
 			touch, ok := w.touchFromEvent(e)
 			if !ok {
 				return
@@ -129,7 +142,6 @@ func (w *etwWatcher) Run(ctx context.Context, out chan<- Touch) error {
 	select {
 	case <-ctx.Done():
 		_ = w.Close()
-		// Process returns after Close; ignore close races.
 		select {
 		case <-errCh:
 		case <-time.After(2 * time.Second):
@@ -142,6 +154,12 @@ func (w *etwWatcher) Run(ctx context.Context, out chan<- Touch) error {
 		}
 		return nil
 	}
+}
+
+func (w *etwWatcher) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
 }
 
 func (w *etwWatcher) touchFromEvent(e *etw.Event) (Touch, bool) {
@@ -162,15 +180,8 @@ func (w *etwWatcher) touchFromEvent(e *etw.Event) (Touch, bool) {
 	path := ""
 	if rawName != "" {
 		path = w.paths.toWin32(rawName)
-		if obj != "" {
-			w.mu.Lock()
-			w.byObj[obj] = path
-			w.mu.Unlock()
-		}
 	} else if obj != "" {
-		w.mu.Lock()
-		path = w.byObj[obj]
-		w.mu.Unlock()
+		path = w.lookupObj(obj)
 	}
 	if path == "" {
 		return Touch{}, false
@@ -185,6 +196,14 @@ func (w *etwWatcher) touchFromEvent(e *etw.Event) (Touch, bool) {
 	}
 	if matched == "" {
 		return Touch{}, false
+	}
+
+	// Cache only paths that match a watched target (Read/Write often omit FileName).
+	if obj != "" {
+		w.rememberObj(obj, path)
+	}
+	if action == "delete" || action == "rename" {
+		w.forgetObj(obj)
 	}
 
 	extra := map[string]string{
@@ -203,4 +222,29 @@ func (w *etwWatcher) touchFromEvent(e *etw.Event) (Touch, bool) {
 		// Lab has not proven action correctness yet - keep inferred until re-proof.
 		Proven: false,
 	}, true
+}
+
+func (w *etwWatcher) lookupObj(obj string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.byObj[obj]
+}
+
+func (w *etwWatcher) rememberObj(obj, path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.byObj) >= etwMaxObjCache {
+		// Soft cap: drop all rather than grow without bound under handle churn.
+		w.byObj = map[string]string{}
+	}
+	w.byObj[obj] = path
+}
+
+func (w *etwWatcher) forgetObj(obj string) {
+	if obj == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.byObj, obj)
 }

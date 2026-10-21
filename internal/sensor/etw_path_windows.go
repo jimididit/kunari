@@ -85,9 +85,15 @@ func (r *ntPathResolver) toWin32(path string) string {
 	r.mu.RUnlock()
 	bestDev, bestDrive := "", ""
 	for dev, drive := range devs {
-		if strings.HasPrefix(lower, dev) && len(dev) > len(bestDev) {
-			bestDev, bestDrive = dev, drive
+		if !strings.HasPrefix(lower, dev) || len(dev) <= len(bestDev) {
+			continue
 		}
+		// Path-component boundary: reject HarddiskVolume3 matching HarddiskVolume30.
+		rest := lower[len(dev):]
+		if rest != "" && !strings.HasPrefix(rest, `\`) {
+			continue
+		}
+		bestDev, bestDrive = dev, drive
 	}
 	if bestDrive == "" {
 		return path
@@ -97,7 +103,8 @@ func (r *ntPathResolver) toWin32(path string) string {
 		return bestDrive + `\`
 	}
 	if !strings.HasPrefix(rest, `\`) {
-		rest = `\` + rest
+		// Should be unreachable after boundary check; keep path unchanged.
+		return path
 	}
 	return bestDrive + rest
 }

@@ -57,25 +57,70 @@ func etwAction(eventID uint16) (string, bool) {
 // etwPathMatches reports whether an event path refers to a watched target.
 // eventPath should already be normalized toward a Win32 path when possible.
 func etwPathMatches(eventPath, target string) bool {
-	ep := strings.ToLower(filepath.Clean(strings.TrimSpace(eventPath)))
-	tp := strings.ToLower(filepath.Clean(strings.TrimSpace(target)))
+	ep := etwNormPath(eventPath)
+	tp := etwNormPath(target)
 	if ep == "" || tp == "" {
 		return false
 	}
 	if ep == tp {
 		return true
 	}
-	if strings.HasSuffix(ep, tp) {
-		return true
+	// Win32 event paths must match exactly (no cross-drive suffix tricks).
+	if len(ep) > 2 && ep[1] == ':' {
+		return false
 	}
+	// NT device paths: compare using the target's path under the drive root
+	// (\foo\bar), requiring a leading separator so "\data\x" does not match "\mydata\x".
 	if len(tp) > 2 && tp[1] == ':' {
-		suffix := tp[2:]
-		suffix = strings.ReplaceAll(suffix, `/`, `\`)
-		if suffix != "" && strings.HasSuffix(ep, suffix) {
-			return true
+		suffix := strings.ReplaceAll(tp[2:], `/`, `\`)
+		if suffix == "" {
+			suffix = `\`
 		}
+		if !strings.HasPrefix(suffix, `\`) {
+			suffix = `\` + suffix
+		}
+		return etwHasPathSuffix(ep, suffix)
 	}
 	return false
+}
+
+func etwNormPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.ReplaceAll(p, `/`, `\`)
+	return strings.ToLower(filepath.Clean(p))
+}
+
+// etwHasPathSuffix reports whether path ends at a separator boundary with suffix.
+// suffix should begin with '\' (e.g. \programdata\kunari\bait.env).
+func etwHasPathSuffix(path, suffix string) bool {
+	if path == "" || suffix == "" {
+		return false
+	}
+	if path == suffix {
+		return true
+	}
+	if !strings.HasSuffix(path, suffix) {
+		return false
+	}
+	// Reject mid-component matches: "...\my" + "\data\file" must not count.
+	// With a leading '\' on suffix, HasSuffix alone is usually enough; still
+	// require the match to start at a separator when path is longer.
+	start := len(path) - len(suffix)
+	if start < 0 {
+		return false
+	}
+	if start == 0 {
+		return true
+	}
+	// suffix begins with '\'; the prior rune must end the previous component
+	// (i.e. not continue a name into the suffix). Prior char should not be '\';
+	// wait - prior char is the last char of the previous component (letter).
+	// Mid-component case: path=\vol\mydata\file suffix=\data\file already fails
+	// HasSuffix. Remaining risk: suffix without leading sep - rejected above.
+	return suffix[0] == '\\' || suffix[0] == '/'
 }
 
 func etwPropString(props map[string]interface{}, keys ...string) string {
