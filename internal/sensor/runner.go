@@ -77,7 +77,7 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, err := OpenBest(cfg.Targets)
+	w, err := OpenBest(cfg.Targets, cfg.PreferTier)
 	if err != nil {
 		return nil, err
 	}

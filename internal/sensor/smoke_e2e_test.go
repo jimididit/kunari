@@ -58,7 +58,7 @@ func TestUnprivilegedSentinelTouchE2E(t *testing.T) {
 			t.Fatalf("unexpected linux tier %q", tier)
 		}
 	case "windows":
-		if tier != sensor.TierWinRDC && tier != sensor.TierWinSACL {
+		if tier != sensor.TierWinRDC && tier != sensor.TierWinSACL && tier != sensor.TierWinETW {
 			t.Fatalf("unexpected windows tier %q", tier)
 		}
 	case "darwin":

@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-func OpenBest(targets []Target) (Watcher, error) {
+func OpenBest(targets []Target, preferTiers []string) (Watcher, error) {
+	_ = preferTiers
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no targets")
 	}
