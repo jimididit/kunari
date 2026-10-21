@@ -145,7 +145,7 @@ func TestBuildAgentRejectsLinuxHomePrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), "/home") {
 		t.Fatalf("error should mention /home: %v", err)
 	}
-	sh := linuxInstall("/home/jdi/kunari-agent", "kunari")
+	sh := linuxInstall("/home/jdi/kunari-agent", "kunari", "kunari-sentinel")
 	if !strings.Contains(sh, "/home/*") {
 		t.Fatal("install.sh should guard against /home prefixes at runtime")
 	}
@@ -273,6 +273,103 @@ func TestDetectFromSiblingManifest(t *testing.T) {
 	}
 	if got := detectFromSiblingManifest(filepath.Join(dir, "missing.env")); got != "" {
 		t.Fatalf("want empty, got %q", got)
+	}
+}
+
+func TestBuildAgentCustomNames(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "pack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		BinaryName:    "acme-tripwire",
+		UnitName:      "acme-tripwire",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "acme-tripwire.service")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "kunari-sentinel.service")); err == nil {
+		t.Fatal("default unit file should not be written when --unit-name is set")
+	}
+	sh, err := os.ReadFile(filepath.Join(out, "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(sh)
+	if !strings.Contains(body, "acme-tripwire") || !strings.Contains(body, "UNIT_NAME=") {
+		t.Fatal("install.sh should use custom binary/unit names")
+	}
+	if !strings.Contains(body, "kunari-sentinel.service") {
+		t.Fatal("install.sh should still clean up legacy kunari-sentinel unit")
+	}
+	deploy, _ := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if !strings.Contains(string(deploy), "acme-tripwire.service") {
+		t.Fatal("DEPLOY.md should mention custom unit")
+	}
+}
+
+func TestBuildAgentRejectsDeniedBinaryName(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	err := BuildAgent(AgentOptions{
+		Target:        "windows",
+		OutDir:        filepath.Join(dir, "pack"),
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		BinaryName:    "svchost",
+	})
+	if err == nil {
+		t.Fatal("expected denied binary name")
+	}
+	if !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error should mention denied: %v", err)
+	}
+}
+
+func TestBuildAgentWindowsCustomTask(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "bait.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "winpack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "windows",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		BinaryName:    "AcmeWatch",
+		UnitName:      "AcmeWatchTask",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ps1, err := os.ReadFile(filepath.Join(out, "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(ps1)
+	if !strings.Contains(body, "$BinName = 'AcmeWatch.exe'") {
+		t.Fatalf("expected auto .exe suffix, got snippet missing; body has BinName? %v", strings.Contains(body, "AcmeWatch"))
+	}
+	if !strings.Contains(body, "$TaskName = 'AcmeWatchTask'") {
+		t.Fatal("custom task name missing")
 	}
 }
 

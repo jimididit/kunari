@@ -27,12 +27,17 @@ func newPackageAgentCmd() *cobra.Command {
 		hubURL        string
 		hubSecretFile string
 		prefix        string
+		binaryName    string
+		unitName      string
 	)
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Build a per-OS sentinel + decoy agent package",
 		Long: "Write a directory with decoy, sentinel.json, install script, and service unit " +
-			"for linux, windows, or darwin. Place a matching kunari binary in bin/ before install.\n\n" +
+			"for linux, windows, or darwin. Place a matching kunari binary in bin/ before install " +
+			"(rename it to match --binary-name if set).\n\n" +
+			"Optional OPSEC knobs: --binary-name, --unit-name, --prefix. Names that impersonate " +
+			"well-known OS binaries or services are denied. This is authorized packaging, not stealth.\n\n" +
 			"Forge the decoy with --detect both first so beacons remain if the sentinel is stopped. " +
 			"DEPLOY.md in the package repeats this dual-layer guidance.\n\n" +
 			authorizedUse,
@@ -46,7 +51,8 @@ func newPackageAgentCmd() *cobra.Command {
 				HubURL:        hubURL,
 				HubSecretFile: hubSecretFile,
 				InstallPrefix: prefix,
-				BinaryName:    "",
+				BinaryName:    binaryName,
+				UnitName:      unitName,
 			}); err != nil {
 				return err
 			}
@@ -63,6 +69,8 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hubURL, "hub-url", "", "hub base URL for sentinel HMAC push")
 	cmd.Flags().StringVar(&hubSecretFile, "hub-secret-file", "", "path to hub ingest.secret to embed (required)")
 	cmd.Flags().StringVar(&prefix, "prefix", "", "install prefix override (optional; safe absolute path only)")
+	cmd.Flags().StringVar(&binaryName, "binary-name", "", "installed binary basename (default kunari / kunari.exe; OS-name deny-list)")
+	cmd.Flags().StringVar(&unitName, "unit-name", "", "persistence name: systemd unit, launchd label, or Windows task (defaults kunari-*)")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("out")
 	_ = cmd.MarkFlagRequired("artifact")

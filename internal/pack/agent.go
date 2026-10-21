@@ -22,6 +22,7 @@ type AgentOptions struct {
 	HubSecretFile string // required; copied into pack as etc/ingest.secret
 	InstallPrefix string // optional override of default install root
 	BinaryName    string // optional; default kunari / kunari.exe
+	UnitName      string // optional; systemd unit / launchd label / Windows task name
 }
 
 // BuildAgent writes an authorized-use agent package under OutDir.
@@ -61,15 +62,12 @@ func BuildAgent(opts AgentOptions) error {
 	if err := validatePrefix(goos, prefix); err != nil {
 		return err
 	}
-	binName := opts.BinaryName
-	if binName == "" {
-		if goos == "windows" {
-			binName = "kunari.exe"
-		} else {
-			binName = "kunari"
-		}
+	binName, err := normalizeBinName(goos, opts.BinaryName)
+	if err != nil {
+		return err
 	}
-	if err := validateBinName(binName); err != nil {
+	unitName, err := normalizeUnitName(goos, opts.UnitName)
+	if err != nil {
 		return err
 	}
 
@@ -127,7 +125,7 @@ func BuildAgent(opts AgentOptions) error {
 	}
 
 	detect := detectFromSiblingManifest(art)
-	deploy := deployMarkdown(goos, prefix, binName, base, detect)
+	deploy := deployMarkdown(goos, prefix, binName, unitName, base, detect)
 	if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
 		return err
 	}
@@ -137,21 +135,23 @@ func BuildAgent(opts AgentOptions) error {
 
 	switch goos {
 	case "linux":
-		if err := writeInstallScript(filepath.Join(out, "install.sh"), linuxInstall(prefix, binName)); err != nil {
+		unitFile := unitName + ".service"
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), linuxInstall(prefix, binName, unitName)); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(out, "kunari-sentinel.service"), []byte(linuxUnit(prefix, binName)), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, unitFile), []byte(linuxUnit(prefix, binName)), 0o600); err != nil {
 			return err
 		}
 	case "darwin":
-		if err := writeInstallScript(filepath.Join(out, "install.sh"), darwinInstall(prefix, binName)); err != nil {
+		plistFile := unitName + ".plist"
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), darwinInstall(prefix, binName, unitName)); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(out, "com.jimididit.kunari-sentinel.plist"), []byte(darwinPlist(prefix, binName)), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, plistFile), []byte(darwinPlist(prefix, binName, unitName)), 0o600); err != nil {
 			return err
 		}
 	case "windows":
-		if err := os.WriteFile(filepath.Join(out, "install.ps1"), []byte(windowsInstall(prefix, binName)), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, "install.ps1"), []byte(windowsInstall(prefix, binName, unitName)), 0o600); err != nil {
 			return err
 		}
 	}
