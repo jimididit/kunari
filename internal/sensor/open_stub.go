@@ -4,7 +4,8 @@ package sensor
 
 import "fmt"
 
-func OpenBest(targets []Target) (Watcher, error) {
+func OpenBest(targets []Target, preferTiers []string) (Watcher, error) {
+	_ = preferTiers
 	return nil, fmt.Errorf("sentinel unsupported on this OS")
 }
 

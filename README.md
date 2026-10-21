@@ -140,7 +140,7 @@ Kunari has two layers. You can use either or both on an authorized host.
 | **Agent** | Decoy + `kunari package agent` / sentinel | Best-effort open/read/modify (tier varies by OS and privilege), plus beacons if forged with `--detect both`. |
 
 1. **Beacon** - A forged decoy that contacts your hub over HTTPS or DNS when something uses it in a way that triggers the embedded beacon. The decoy file can sit alone on the endpoint; forge and hub stay on your infrastructure. This does not see every filesystem touch - only those network fetches.
-2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). Forge with `--detect both` if you want beacon and sentinel together.
+2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). On Windows the default order is `win-sacl-4663` (lab-proven), then experimental `win-etw-kernel-file` (needs elevation; lab not yet proven), then `win-rdc`. Forge with `--detect both` if you want beacon and sentinel together.
 
 Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub hostname (not `127.0.0.1`) and terminate TLS in front of the hub ([examples/tls-hub](examples/tls-hub/README.md)). Optional DNS beacons use `--collector-dns` with a zone you control ([examples/dns-hub](examples/dns-hub/README.md)). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 

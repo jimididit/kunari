@@ -3,6 +3,7 @@ module github.com/jimididit/kunari
 go 1.26.10
 
 require (
+	github.com/fredwangwang/etw v0.0.0-20260816132252-425a709d8824
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.73
