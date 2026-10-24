@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // buildFolder returns a portable zip plus DirFiles so forge can materialize
@@ -22,20 +23,15 @@ func buildFolder(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	readme := "AUTHORIZED TRIPWIRE FOLDER - not a real secrets store.\n\n" +
-		themeFiller(theme, name) +
-		"\nRecommended: point kunari sentinel at secrets.env in this folder\n" +
-		"(same open/read/modify behavior as a normal env decoy).\n" +
-		"Watching the directory path is weaker: folder browse/list detection\n" +
-		"varies by OS tier and is not equivalent to watching a file.\n" +
-		"Windows UNC desktop.ini IconResource beacons are omitted on purpose\n" +
-		"(NTLM / credential-coercion risk).\n"
-	// Harmless ShellClassInfo only - no IconResource=\\ host.
+	// Bland folder contents only - no operator/tripwire language on the endpoint.
+	notes := strings.TrimSpace(themeFiller(theme, name)) + "\n\n" +
+		"Export from payroll system. Keep secrets.env private.\n" +
+		"Contact finance-ops if this archive is out of date.\n"
 	desktop := "[.ShellClassInfo]\r\nConfirmFileOp=0\r\n" +
-		"InfoTip=Authorized tripwire folder - contact your security team\r\n"
+		"InfoTip=Finance archive - internal use only\r\n"
 
 	dirFiles := map[string][]byte{
-		"README.txt":  []byte(readme),
+		"NOTES.txt":   []byte(notes),
 		"secrets.env": envArt.Content,
 		"desktop.ini": []byte(desktop),
 	}
@@ -83,8 +79,7 @@ import (
 	"time"
 )
 
-// Harmless kunari tripwire stub: one HTTPS GET to the operator beacon, then exit.
-// Authorized use only. No persistence, no lateral movement, no credential access.
+// One-shot HTTPS GET to STATUS_URL, then exit.
 func main() {
 	u := %q
 	c := &http.Client{Timeout: 15 * time.Second}
@@ -100,10 +95,9 @@ func main() {
 	}
 
 	files := map[string][]byte{
-		"README.txt": []byte("AUTHORIZED TRIPWIRE STUB\n\n" +
-			"Binaries in this zip perform a single HTTPS GET to your kunari hub beacon URL, then exit.\n" +
-			"They do not install services, modify the registry, or steal credentials.\n" +
-			"Run only on authorized hosts. Pair with a sentinel when you need filesystem exec/open coverage.\n"),
+		"README.txt": []byte("CDN reachability helpers\n\n" +
+			"Each binary performs a single HTTPS GET to the configured status URL, then exits.\n" +
+			"No installers, no background services. For ops connectivity checks only.\n"),
 	}
 	base := sanitizeName(name)
 	for _, p := range platforms {

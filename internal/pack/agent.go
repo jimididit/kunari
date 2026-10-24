@@ -178,11 +178,6 @@ func copyFile(src, dst string, mode os.FileMode) error {
 }
 
 func binReadme(binName string) string {
-	return fmt.Sprintf(`Place the Kunari %s binary here before running the install script.
-
-Download a release archive from https://github.com/jimididit/kunari/releases
-matching this package's target OS/arch, or copy a locally built binary.
-
-Authorized use only.
-`, binName)
+	// Operator-facing only; client zips should omit this file.
+	return fmt.Sprintf("Place the %s binary here before running install.\n", binName)
 }

@@ -41,6 +41,75 @@ func TestForgeEnvRandomization(t *testing.T) {
 	}
 }
 
+func TestForgeEnvHasNoTripwireBanners(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "env", Name: "payroll-2024", Theme: "finance", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-1",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(res.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, bad := range []string{
+		"AUTHORIZED TRIPWIRE",
+		"decoy credentials",
+		"canary_user",
+		"not-a-real-password",
+		"HEALTHCHECK_URL",
+	} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("env artifact must not contain %q; got:\n%s", bad, text)
+		}
+	}
+	if !strings.Contains(text, "STATUS_URL=") {
+		t.Fatalf("env artifact should use STATUS_URL; got:\n%s", text)
+	}
+	if !strings.Contains(text, "app_ro") {
+		t.Fatalf("env artifact should use bland DB user; got:\n%s", text)
+	}
+}
+
+func TestForgeFolderHasNoTripwireBanners(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "folder", Name: "hr-archive", Theme: "hr", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-FOLDER",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := os.ReadFile(filepath.Join(res.DirPath, "secrets.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := os.ReadFile(filepath.Join(res.DirPath, "NOTES.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(secrets) + "\n" + string(notes)
+	for _, bad := range []string{
+		"AUTHORIZED TRIPWIRE",
+		"decoy credentials",
+		"TRIPWIRE FOLDER",
+		"kunari sentinel",
+		"normal env decoy",
+	} {
+		if strings.Contains(combined, bad) {
+			t.Fatalf("folder content must not contain %q; got:\n%s", bad, combined)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(res.DirPath, "README.txt")); err == nil {
+		t.Fatal("folder must not ship README.txt (operator language); use NOTES.txt")
+	}
+}
+
 func TestLintFlagsSlackWebhook(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "bad.env")
@@ -51,6 +120,58 @@ func TestLintFlagsSlackWebhook(t *testing.T) {
 	}
 	if len(r.Findings) == 0 {
 		t.Fatal("expected findings")
+	}
+}
+
+func TestLintFlagsTripwireBannersCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"upper", "# AUTHORIZED TRIPWIRE - not real\n", "tripwire banner"},
+		{"mixed", "# Authorized Tripwire folder\n", "tripwire banner"},
+		{"decoy", "# decoy credentials (inert)\n", "decoy credentials"},
+		{"folder", "AUTHORIZED TRIPWIRE FOLDER - skip\n", "tripwire folder"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(dir, tc.name+".txt")
+			if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r, err := forge.LintFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, f := range r.Findings {
+				if strings.Contains(f, tc.want) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected finding containing %q; got %+v", tc.want, r.Findings)
+			}
+		})
+	}
+}
+
+func TestLintAllowsAKIAShapedLureKeys(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "lure.env")
+	body := "AWS_ACCESS_KEY_ID=AKIATESTKEY12345678\nSTATUS_URL=https://beacon.example.com/b/abc\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := forge.LintFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Findings) != 0 {
+		t.Fatalf("AKIA-shaped lure keys must not fail lint; got %+v", r.Findings)
 	}
 }
 

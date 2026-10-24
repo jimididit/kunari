@@ -24,29 +24,32 @@ func LintFile(path string) (*LintResult, error) {
 		return nil, err
 	}
 	r := &LintResult{Path: path}
-	s := string(b)
+	// Match needles against lowercased content so mixed-case banners still hit.
+	// bad strings below are stored lowercase on purpose.
+	lower := strings.ToLower(string(b))
 	checks := []struct {
 		name string
 		bad  string
 	}{
-		{"thinkst marker", "HONEYDROP_TOKEN_URL"},
+		{"thinkst marker", "honeydrop_token_url"},
 		{"canarytokens domain", "canarytokens.com"},
 		{"canarytokens org", "canarytokens.org"},
 		{"grabify", "grabify"},
 		{"embedded slack webhook", "hooks.slack.com/services/"},
 		{"embedded discord webhook", "discord.com/api/webhooks/"},
-		{"ntlm-ish unc iconresource", "IconResource=\\\\"},
+		{"ntlm-ish unc iconresource", `iconresource=\`},
+		// In-band banners are endpoint giveaways - forge must not emit these.
+		{"tripwire banner", "authorized tripwire"},
+		{"decoy credentials banner", "decoy credentials"},
+		{"tripwire folder banner", "tripwire folder"},
+		{"kunari sentinel hint", "kunari sentinel"},
 	}
-	lower := strings.ToLower(s)
 	for _, c := range checks {
-		if strings.Contains(lower, strings.ToLower(c.bad)) || strings.Contains(s, c.bad) {
+		if strings.Contains(lower, c.bad) {
 			r.Findings = append(r.Findings, fmt.Sprintf("%s: contains %q", c.name, c.bad))
 		}
 	}
-	// Fake AWS keys in env files are expected decoys; flag only if they look like
-	// well-known Thinkst canary prefixes when present without kunari decoy banner.
-	if strings.Contains(s, "AKIA") && !strings.Contains(s, "AUTHORIZED TRIPWIRE") && !strings.Contains(s, "decoy") {
-		r.Findings = append(r.Findings, "aws-key-shaped string without decoy banner")
-	}
+	// AKIA-shaped strings are expected in env/folder HTTPS lures and are not
+	// flagged. Third-party canary markers above remain the fingerprint checks.
 	return r, nil
 }

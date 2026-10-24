@@ -40,21 +40,22 @@ func buildArtifact(itemType, name, theme, httpsURL, dnsName string, platforms []
 }
 
 func buildEnv(name, theme, httpsURL, dnsName string) (*Artifact, error) {
+	// Content must look like a normal secrets file. Do not label tripwires/decoys
+	// in-band - that is a giveaway to anyone who opens the file on the endpoint.
 	var b strings.Builder
-	b.WriteString("# " + name + " - decoy credentials (inert)\n")
-	b.WriteString("# AUTHORIZED TRIPWIRE - not real secrets\n")
 	b.WriteString(themeFiller(theme, name))
-	b.WriteString(fmt.Sprintf("APP_ENV=staging\n"))
-	b.WriteString(fmt.Sprintf("DATABASE_URL=postgres://canary_user:not-a-real-password-%s@db.example.invalid:5432/app\n", randomPadding(6)))
+	b.WriteString("APP_ENV=staging\n")
+	b.WriteString(fmt.Sprintf("DATABASE_URL=postgres://app_ro:%s@db.internal.example:5432/app\n", randomPadding(12)))
 	b.WriteString(fmt.Sprintf("AWS_ACCESS_KEY_ID=AKIA%s\n", strings.ToUpper(randomPadding(16))))
 	b.WriteString(fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s\n", randomPadding(40)))
+	b.WriteString(fmt.Sprintf("REDIS_URL=redis://:%s@cache.internal.example:6379/0\n", randomPadding(16)))
 	if httpsURL != "" {
-		b.WriteString("# healthcheck\nHEALTHCHECK_URL=" + httpsURL + "\n")
+		// Believable ops name; value is the collector beacon URL.
+		b.WriteString("STATUS_URL=" + httpsURL + "\n")
 	}
 	if dnsName != "" {
-		b.WriteString("# resolver probe host\nMETRICS_HOST=" + dnsName + "\n")
+		b.WriteString("METRICS_HOST=" + dnsName + "\n")
 	}
-	b.WriteString("# pad:" + randomPadding(32+randomInt(64)) + "\n")
 	return &Artifact{Filename: sanitizeName(name) + ".env", Content: []byte(b.String())}, nil
 }
 
@@ -288,7 +289,7 @@ func buildPDF(name, theme, httpsURL, dnsName string) (*Artifact, error) {
 func sanitizeName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "tripwire"
+		name = "app-secrets"
 	}
 	repl := strings.NewReplacer("/", "_", "\\", "_", " ", "-", "..", ".")
 	return repl.Replace(name)

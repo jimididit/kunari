@@ -10,7 +10,7 @@ func linuxInstall(prefix, binName, unitName string) string {
 	bq := shQuote(binName)
 	uq := shQuote(unitName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
-# Kunari agent install (Linux). Authorized use only.
+# Endpoint helper install (Linux).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
@@ -58,7 +58,7 @@ func linuxUnit(prefix, binName string) string {
 	cfg := targetJoin("linux", prefix, "etc", "sentinel.json")
 	bin := targetJoin("linux", prefix, "bin", binName)
 	return fmt.Sprintf(`[Unit]
-Description=Kunari sentinel tripwire sensor
+Description=Endpoint file helper
 After=network.target
 
 [Service]
@@ -82,7 +82,7 @@ func darwinInstall(prefix, binName, unitName string) string {
 	bq := shQuote(binName)
 	uq := shQuote(unitName)
 	return fmt.Sprintf(`#!/usr/bin/env bash
-# Kunari agent install (macOS). Authorized use only. Prefer a dedicated operator account.
+# Endpoint helper install (macOS).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
@@ -155,9 +155,9 @@ func windowsInstall(prefix, binName, unitName string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	b := strings.ReplaceAll(binName, `'`, `''`)
 	u := strings.ReplaceAll(unitName, `'`, `''`)
-	return fmt.Sprintf(`# Kunari agent install (Windows). Run elevated. Authorized use only.
-# The package binary is not a Windows Service; install uses a SYSTEM scheduled task.
-# Prefer ScheduledTasks cmdlets over schtasks.exe to avoid native stderr/quote pitfalls under $ErrorActionPreference=Stop.
+	return fmt.Sprintf(`# Endpoint helper install (Windows). Run elevated.
+# Not a Windows Service binary; install uses a SYSTEM scheduled task.
+# Prefer ScheduledTasks cmdlets over schtasks.exe under $ErrorActionPreference=Stop.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
