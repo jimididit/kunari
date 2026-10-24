@@ -35,15 +35,15 @@ func randomPastTime() time.Time {
 func themeFiller(theme, name string) string {
 	switch theme {
 	case "finance":
-		return fmt.Sprintf("INTERNAL DRAFT - %s\nDo not distribute.\nPrepared for Q%d budget review.\nContact: finance-ops@example.invalid\n", name, randomInt(4)+1)
+		return fmt.Sprintf("# %s - finance working copy\n# Do not distribute outside finance.\n# Q%d budget export\n# contact: finance-ops@example.invalid\n", name, randomInt(4)+1)
 	case "hr":
-		return fmt.Sprintf("CONFIDENTIAL - %s\nHR working copy.\nEmployee ID placeholder: E-%04d\n", name, randomInt(9000)+1000)
+		return fmt.Sprintf("# %s - HR confidential\n# Working copy only\n# Employee ref: E-%04d\n", name, randomInt(9000)+1000)
 	case "devops":
-		return fmt.Sprintf("# %s\n# rotation notes - non-production\n# last reviewed: %s\n", name, randomPastTime().Format("2006-01-02"))
+		return fmt.Sprintf("# %s\n# staging secrets - rotate after cutover\n# last reviewed: %s\n", name, randomPastTime().Format("2006-01-02"))
 	case "it-admin":
-		return fmt.Sprintf("IT Admin notes: %s\nJump host inventory draft.\nTicket: IT-%d\n", name, randomInt(90000)+10000)
+		return fmt.Sprintf("# %s - IT admin notes\n# Jump host inventory draft\n# Ticket: IT-%d\n", name, randomInt(90000)+10000)
 	default:
-		return fmt.Sprintf("%s\nGenerated decoy content for authorized tripwire placement.\nRef: %x\n", name, randomBytes(4))
+		return fmt.Sprintf("# %s\n# local env - do not commit\n# reviewed: %s\n", name, randomPastTime().Format("2006-01-02"))
 	}
 }
 

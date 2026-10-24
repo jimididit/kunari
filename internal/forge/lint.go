@@ -36,17 +36,17 @@ func LintFile(path string) (*LintResult, error) {
 		{"embedded slack webhook", "hooks.slack.com/services/"},
 		{"embedded discord webhook", "discord.com/api/webhooks/"},
 		{"ntlm-ish unc iconresource", "IconResource=\\\\"},
+		// In-band banners are endpoint giveaways - forge must not emit these.
+		{"tripwire banner", "AUTHORIZED TRIPWIRE"},
+		{"decoy credentials banner", "decoy credentials"},
+		{"tripwire folder banner", "TRIPWIRE FOLDER"},
+		{"kunari sentinel hint", "kunari sentinel"},
 	}
 	lower := strings.ToLower(s)
 	for _, c := range checks {
 		if strings.Contains(lower, strings.ToLower(c.bad)) || strings.Contains(s, c.bad) {
 			r.Findings = append(r.Findings, fmt.Sprintf("%s: contains %q", c.name, c.bad))
 		}
-	}
-	// Fake AWS keys in env files are expected decoys; flag only if they look like
-	// well-known Thinkst canary prefixes when present without kunari decoy banner.
-	if strings.Contains(s, "AKIA") && !strings.Contains(s, "AUTHORIZED TRIPWIRE") && !strings.Contains(s, "decoy") {
-		r.Findings = append(r.Findings, "aws-key-shaped string without decoy banner")
 	}
 	return r, nil
 }

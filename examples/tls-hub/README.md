@@ -78,7 +78,7 @@ Use the public HTTPS origin (not the loopback listen address). Place only the fo
 
 | Type | HTTPS `--collector` | DNS `--collector-dns` | Lure shape |
 |---|---|---|---|
-| `env` | optional if DNS set | optional if HTTPS set | `HEALTHCHECK_URL` / `METRICS_HOST` |
+| `env` | optional if DNS set | optional if HTTPS set | `STATUS_URL` / `METRICS_HOST` |
 | `svg` / `html` | required | not embedded | zero-size image / 1x1 img |
 | `docx` / `xlsx` | required | not embedded | OOXML external image relationship |
 | `pdf` | optional if DNS set | optional if HTTPS set | link annotation; DNS-only uses `https://<name>/` |

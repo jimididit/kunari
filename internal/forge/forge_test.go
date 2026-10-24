@@ -41,6 +41,75 @@ func TestForgeEnvRandomization(t *testing.T) {
 	}
 }
 
+func TestForgeEnvHasNoTripwireBanners(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "env", Name: "payroll-2024", Theme: "finance", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-1",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(res.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, bad := range []string{
+		"AUTHORIZED TRIPWIRE",
+		"decoy credentials",
+		"canary_user",
+		"not-a-real-password",
+		"HEALTHCHECK_URL",
+	} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("env artifact must not contain %q; got:\n%s", bad, text)
+		}
+	}
+	if !strings.Contains(text, "STATUS_URL=") {
+		t.Fatalf("env artifact should use STATUS_URL; got:\n%s", text)
+	}
+	if !strings.Contains(text, "app_ro") {
+		t.Fatalf("env artifact should use bland DB user; got:\n%s", text)
+	}
+}
+
+func TestForgeFolderHasNoTripwireBanners(t *testing.T) {
+	dir := t.TempDir()
+	res, err := forge.Run(forge.Options{
+		Type: "folder", Name: "hr-archive", Theme: "hr", Detect: "both",
+		Collector: "https://beacon.example.com", AuthzRef: "LAB-FOLDER",
+		OutDir: dir, KeyPath: filepath.Join(dir, "k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := os.ReadFile(filepath.Join(res.DirPath, "secrets.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := os.ReadFile(filepath.Join(res.DirPath, "NOTES.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(secrets) + "\n" + string(notes)
+	for _, bad := range []string{
+		"AUTHORIZED TRIPWIRE",
+		"decoy credentials",
+		"TRIPWIRE FOLDER",
+		"kunari sentinel",
+		"normal env decoy",
+	} {
+		if strings.Contains(combined, bad) {
+			t.Fatalf("folder content must not contain %q; got:\n%s", bad, combined)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(res.DirPath, "README.txt")); err == nil {
+		t.Fatal("folder must not ship README.txt (operator language); use NOTES.txt")
+	}
+}
+
 func TestLintFlagsSlackWebhook(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "bad.env")
