@@ -13,7 +13,8 @@ const (
 	TierInotify     Tier = "inotify"
 	TierAuditd      Tier = "auditd"
 	TierWinSACL     Tier = "win-sacl-4663"
-	TierWinRDC      Tier = "win-rdc" // ReadDirectoryChangesW - no read/open
+	TierWinETW      Tier = "win-etw-kernel-file" // Microsoft-Windows-Kernel-File; lab NV
+	TierWinRDC      Tier = "win-rdc"             // ReadDirectoryChangesW - no read/open
 	TierMacESLogger Tier = "mac-eslogger"
 	TierMacFSEvents Tier = "mac-fsevents"
 	TierNone        Tier = "none"
