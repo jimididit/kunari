@@ -123,6 +123,58 @@ func TestLintFlagsSlackWebhook(t *testing.T) {
 	}
 }
 
+func TestLintFlagsTripwireBannersCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"upper", "# AUTHORIZED TRIPWIRE - not real\n", "tripwire banner"},
+		{"mixed", "# Authorized Tripwire folder\n", "tripwire banner"},
+		{"decoy", "# decoy credentials (inert)\n", "decoy credentials"},
+		{"folder", "AUTHORIZED TRIPWIRE FOLDER - skip\n", "tripwire folder"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(dir, tc.name+".txt")
+			if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r, err := forge.LintFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, f := range r.Findings {
+				if strings.Contains(f, tc.want) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected finding containing %q; got %+v", tc.want, r.Findings)
+			}
+		})
+	}
+}
+
+func TestLintAllowsAKIAShapedLureKeys(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "lure.env")
+	body := "AWS_ACCESS_KEY_ID=AKIATESTKEY12345678\nSTATUS_URL=https://beacon.example.com/b/abc\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := forge.LintFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Findings) != 0 {
+		t.Fatalf("AKIA-shaped lure keys must not fail lint; got %+v", r.Findings)
+	}
+}
+
 func TestForgeSVG(t *testing.T) {
 	dir := t.TempDir()
 	_, err := forge.Run(forge.Options{
