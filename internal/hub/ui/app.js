@@ -18,6 +18,17 @@
   var tokensEmpty = document.getElementById("tokens-empty");
   var agentsBody = document.getElementById("agents-body");
   var agentsEmpty = document.getElementById("agents-empty");
+  var agentsWarn = document.getElementById("agents-warn");
+  var fltHeartbeats = document.getElementById("flt-heartbeats");
+  var fltBeacon = document.getElementById("flt-beacon");
+  var fltSentinel = document.getElementById("flt-sentinel");
+  var fltAgent = document.getElementById("flt-agent");
+  var fltHost = document.getElementById("flt-host");
+  var agentDrawer = document.getElementById("agent-drawer");
+  var drawerTitle = document.getElementById("drawer-title");
+  var drawerMeta = document.getElementById("drawer-meta");
+  var drawerEvents = document.getElementById("drawer-events");
+  var drawerEmpty = document.getElementById("drawer-empty");
 
   var liveAbort = null;
   var reconnectTimer = null;
@@ -25,6 +36,7 @@
   var seenSeq = Object.create(null);
   var lastSeq = 0;
   var wantLive = false;
+  var eventRows = []; // keep for refilter
 
   function token() {
     return sessionStorage.getItem(STORAGE_KEY) || "";
@@ -94,6 +106,67 @@
     }
   }
 
+  function fmtRelative(iso) {
+    if (!iso) return "";
+    try {
+      var t = new Date(iso).getTime();
+      var sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (sec < 60) return sec + "s ago";
+      if (sec < 3600) return Math.floor(sec / 60) + "m ago";
+      if (sec < 86400) return Math.floor(sec / 3600) + "h ago";
+      return Math.floor(sec / 86400) + "d ago";
+    } catch (e) {
+      return fmtTime(iso);
+    }
+  }
+
+  function hostLabel(ev) {
+    if (!ev || !ev.host) return "";
+    var h = ev.host.hostname || "";
+    var os = ev.host.os || "";
+    if (h && os) return h + " (" + os + ")";
+    return h || os || shortID(ev.host.id);
+  }
+
+  function pathOrSrc(ev) {
+    if (ev && ev.file && ev.file.path) return ev.file.path;
+    if (ev && ev.network && ev.network.src_ip) return ev.network.src_ip;
+    return "";
+  }
+
+  function eventPassesFilters(ev) {
+    if (!ev) return false;
+    var action = ev.action || "";
+    var detector = ev.detector || "";
+    var tid = ev.token_id || "";
+    if (tid === "heartbeat" || action === "heartbeat") {
+      if (!fltHeartbeats.checked) return false;
+    } else if (detector === "beacon" || action === "beacon_fetch" || (tid && tid.indexOf("agent_") !== 0 && detector !== "hub" && detector !== "sentinel")) {
+      // beacons often detector=beacon
+      if (detector === "beacon" || action === "beacon_fetch") {
+        if (!fltBeacon.checked) return false;
+      } else if (detector === "hub" || tid === "agent_status" || action.indexOf("agent_") === 0) {
+        if (!fltAgent.checked) return false;
+      } else if (!fltSentinel.checked) {
+        return false;
+      }
+    } else if (detector === "hub" || tid === "agent_status" || action.indexOf("agent_") === 0) {
+      if (!fltAgent.checked) return false;
+    } else if (detector === "sentinel" || detector === "fanotify" || detector === "inotify" ||
+               (detector && detector.indexOf("win-") === 0) || (detector && detector.indexOf("mac-") === 0)) {
+      if (!fltSentinel.checked) return false;
+    } else if (detector === "beacon") {
+      if (!fltBeacon.checked) return false;
+    }
+    var hostQ = (fltHost.value || "").trim().toLowerCase();
+    if (hostQ) {
+      var label = hostLabel(ev).toLowerCase();
+      var id = (ev.host && ev.host.id) ? String(ev.host.id).toLowerCase() : "";
+      if (label.indexOf(hostQ) === -1 && id.indexOf(hostQ) === -1) return false;
+    }
+    return true;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     var headers = authHeaders(opts.headers || {});
@@ -119,13 +192,108 @@
 
   async function refreshStatus() {
     var data = await api("/api/v1/status");
+    document.getElementById("stat-alerts").textContent = String(data.alerts != null ? data.alerts : 0);
     document.getElementById("stat-hits").textContent = String(data.hits);
     document.getElementById("stat-seq").textContent = String(data.last_seq);
     var pending = data.queue && typeof data.queue.pending === "number" ? data.queue.pending : 0;
     document.getElementById("stat-queue").textContent = String(pending);
     var sinks = data.queue && data.queue.sinks ? data.queue.sinks : [];
     document.getElementById("stat-sinks").textContent = sinks.length ? sinks.join(", ") : "(none)";
+    if (data.agents_persist_error) {
+      agentsWarn.textContent = "agents.json persist error: " + data.agents_persist_error;
+      agentsWarn.classList.remove("hidden");
+    } else {
+      agentsWarn.textContent = "";
+      agentsWarn.classList.add("hidden");
+    }
     renderAgents(data.agents || []);
+  }
+
+  function closeAgentDrawer() {
+    agentDrawer.classList.add("hidden");
+    drawerEvents.textContent = "";
+  }
+
+  function setDrawerMeta(a) {
+    drawerTitle.textContent = a.hostname || a.id || "Agent";
+    drawerMeta.textContent = "";
+    var rows = [
+      ["id", a.id || ""],
+      ["status", a.missing ? "missing" : "ok"],
+      ["os", a.os || ""],
+      ["tier", a.tier || ""],
+      ["version", a.agent_version || ""],
+      ["last seen", fmtTime(a.last_seen) + (a.last_seen ? " (" + fmtRelative(a.last_seen) + ")" : "")],
+    ];
+    for (var i = 0; i < rows.length; i++) {
+      if (!rows[i][1]) continue;
+      var dt = document.createElement("dt");
+      dt.textContent = rows[i][0];
+      var dd = document.createElement("dd");
+      dd.textContent = rows[i][1];
+      drawerMeta.appendChild(dt);
+      drawerMeta.appendChild(dd);
+    }
+  }
+
+  function renderDrawerEvents(events) {
+    drawerEvents.textContent = "";
+    var list = (events || []).slice();
+    list.sort(function (a, b) {
+      var sa = a.integrity && a.integrity.seq != null ? a.integrity.seq : 0;
+      var sb = b.integrity && b.integrity.seq != null ? b.integrity.seq : 0;
+      return sb - sa;
+    });
+    if (!list.length) {
+      drawerEmpty.classList.remove("hidden");
+      return;
+    }
+    drawerEmpty.classList.add("hidden");
+    for (var i = 0; i < list.length; i++) {
+      var ev = list[i];
+      var tr = document.createElement("tr");
+      if (ev.action === "agent_missing" || ev.action === "beacon_fetch") {
+        tr.className = "row-alert";
+      }
+      var cells = [
+        ev.integrity && ev.integrity.seq != null ? String(ev.integrity.seq) : "",
+        fmtTime(ev.observed_at),
+        ev.action || "",
+        pathOrSrc(ev),
+        ev.memo || "",
+      ];
+      for (var c = 0; c < cells.length; c++) {
+        var td = document.createElement("td");
+        if (c === 0) td.className = "mono";
+        if (c === 3) td.className = "path";
+        td.textContent = cells[c];
+        tr.appendChild(td);
+      }
+      drawerEvents.appendChild(tr);
+    }
+  }
+
+  function openAgentDrawer(a) {
+    if (!a || !a.id) return;
+    setDrawerMeta(a);
+    agentDrawer.classList.remove("hidden");
+    drawerEmpty.classList.add("hidden");
+    drawerEvents.textContent = "";
+    var local = [];
+    for (var i = 0; i < eventRows.length; i++) {
+      var ev = eventRows[i];
+      if (!ev || !ev.host || ev.host.id !== a.id) continue;
+      if (ev.token_id === "heartbeat" || ev.action === "heartbeat") continue;
+      local.push(ev);
+    }
+    if (local.length) renderDrawerEvents(local.slice(0, 40));
+    api("/api/v1/events?host_id=" + encodeURIComponent(a.id) + "&exclude_heartbeats=1&limit=40")
+      .then(function (data) {
+        renderDrawerEvents((data && data.events) || []);
+      })
+      .catch(function () {
+        if (!local.length) renderDrawerEvents([]);
+      });
   }
 
   function renderAgents(agents) {
@@ -145,12 +313,19 @@
     for (var j = 0; j < agents.length; j++) {
       (function (a) {
         var tr = document.createElement("tr");
+        tr.className = "agent-row";
+        tr.title = "Open agent detail";
+        tr.addEventListener("click", function (ev) {
+          if (ev.target && ev.target.closest && ev.target.closest("button")) return;
+          openAgentDrawer(a);
+        });
         var cells = [
           a.hostname || "(unknown)",
           a.missing ? "missing" : "ok",
           a.os || "",
           a.tier || "",
-          fmtTime(a.last_seen),
+          a.agent_version || "",
+          fmtRelative(a.last_seen),
           shortID(a.id),
         ];
         for (var k = 0; k < cells.length; k++) {
@@ -161,7 +336,8 @@
             pill.textContent = cells[k];
             td.appendChild(pill);
           } else {
-            if (k === 5) {
+            if (k === 5) td.title = fmtTime(a.last_seen);
+            if (k === 6) {
               td.className = "mono";
               td.title = a.id || "";
             }
@@ -169,9 +345,80 @@
           }
           tr.appendChild(td);
         }
+        var act = document.createElement("td");
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn ghost";
+        btn.textContent = "Retire";
+        btn.title = "Remove from active roster";
+        btn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          if (!a.id) return;
+          if (!window.confirm("Retire agent " + (a.hostname || a.id) + "?")) return;
+          btn.disabled = true;
+          api("/api/v1/agents/" + encodeURIComponent(a.id) + "/retire", { method: "POST" })
+            .then(function () {
+              closeAgentDrawer();
+              return refreshStatus();
+            })
+            .catch(function (err) {
+              if (err.message !== "unauthorized") {
+                window.alert("Retire failed: " + err.message);
+                btn.disabled = false;
+              }
+            });
+        });
+        act.appendChild(btn);
+        tr.appendChild(act);
         agentsBody.appendChild(tr);
       })(agents[j]);
     }
+  }
+
+  function buildEventRow(ev) {
+    var tr = document.createElement("tr");
+    if (ev.action === "agent_missing" || ev.action === "beacon_fetch") {
+      tr.className = "row-alert";
+    }
+    var tokenCol = ev.token_id || "";
+    if (tokenCol === "agent_status" || tokenCol === "heartbeat") {
+      tokenCol = shortID(ev.host && ev.host.id) || tokenCol;
+    } else {
+      tokenCol = shortID(tokenCol);
+    }
+    var cells = [
+      ev.integrity && ev.integrity.seq != null ? String(ev.integrity.seq) : "",
+      fmtTime(ev.observed_at),
+      hostLabel(ev),
+      ev.action || "",
+      ev.detector || "",
+      pathOrSrc(ev),
+      tokenCol,
+      ev.memo || "",
+    ];
+    for (var i = 0; i < cells.length; i++) {
+      var td = document.createElement("td");
+      if (i === 0 || i === 6) td.className = "mono";
+      if (i === 5) td.className = "path";
+      td.textContent = cells[i];
+      if (i === 6 && ev.token_id) td.title = ev.token_id;
+      if (i === 2 && ev.host && ev.host.id) td.title = ev.host.id;
+      tr.appendChild(td);
+    }
+    return tr;
+  }
+
+  function redrawEvents() {
+    eventsBody.textContent = "";
+    var shown = 0;
+    for (var i = 0; i < eventRows.length; i++) {
+      if (!eventPassesFilters(eventRows[i])) continue;
+      eventsBody.appendChild(buildEventRow(eventRows[i]));
+      shown++;
+      if (shown >= MAX_EVENTS) break;
+    }
+    if (shown === 0) eventsEmpty.classList.remove("hidden");
+    else eventsEmpty.classList.add("hidden");
   }
 
   function prependEvent(ev) {
@@ -181,28 +428,9 @@
       seenSeq[seq] = true;
       if (seq > lastSeq) lastSeq = seq;
     }
-    eventsEmpty.classList.add("hidden");
-    var tr = document.createElement("tr");
-    var cells = [
-      seq != null ? String(seq) : "",
-      fmtTime(ev.observed_at),
-      ev.action || "",
-      ev.detector || "",
-      ev.detection_tier || "",
-      shortID(ev.token_id),
-      ev.memo || "",
-    ];
-    for (var i = 0; i < cells.length; i++) {
-      var td = document.createElement("td");
-      if (i === 0 || i === 5) td.className = "mono";
-      td.textContent = cells[i];
-      if (i === 5 && ev.token_id) td.title = ev.token_id;
-      tr.appendChild(td);
-    }
-    eventsBody.insertBefore(tr, eventsBody.firstChild);
-    while (eventsBody.children.length > MAX_EVENTS) {
-      eventsBody.removeChild(eventsBody.lastChild);
-    }
+    eventRows.unshift(ev);
+    while (eventRows.length > MAX_EVENTS * 3) eventRows.pop();
+    redrawEvents();
   }
 
   function renderTokens(tokens) {
@@ -302,7 +530,6 @@
     }, RECONNECT_MS);
   }
 
-  // Parse one or more SSE frames from a text buffer. Returns leftover partial frame.
   function consumeSSE(buf, onEvent) {
     var parts = buf.split("\n\n");
     var rest = parts.pop();
@@ -319,7 +546,6 @@
         } else if (line.indexOf("data:") === 0) {
           dataLines.push(line.slice(5).replace(/^ /, ""));
         }
-        // comments / id lines ignored
       }
       if (eventName === "kunari.event" && dataLines.length) {
         try {
@@ -330,8 +556,6 @@
     return rest || "";
   }
 
-  // fetch-stream SSE with Authorization header (never put api.token in the URL).
-  // Server backfills from after_seq then streams live - no separate history pull.
   async function startLive() {
     stopLive(false);
     wantLive = true;
@@ -349,7 +573,9 @@
     }, 5000);
 
     try {
-      var res = await fetch("/api/v1/events/stream?after_seq=" + encodeURIComponent(String(lastSeq)), {
+      var q = "/api/v1/events/stream?after_seq=" + encodeURIComponent(String(lastSeq));
+      if (fltHeartbeats.checked) q += "&include_heartbeats=1";
+      var res = await fetch(q, {
         method: "GET",
         headers: authHeaders({ Accept: "text/event-stream" }),
         signal: ctrl.signal,
@@ -385,8 +611,6 @@
     showConsole();
     await refreshStatus();
     await refreshTokens();
-    // Stream first: hub SSE subscribes then backfills, so there is no
-    // history→subscribe gap and the token never appears in the URL.
     startLive();
   }
 
@@ -410,13 +634,29 @@
 
   document.getElementById("btn-clear-events").addEventListener("click", function () {
     eventsBody.textContent = "";
+    eventRows = [];
     seenSeq = Object.create(null);
-    lastSeq = 0;
+    // Keep lastSeq so reconnect does not re-backfill the entire chain.
     eventsEmpty.classList.remove("hidden");
   });
 
   document.getElementById("btn-refresh-tokens").addEventListener("click", function () {
     refreshTokens().catch(function () {});
+  });
+
+  document.getElementById("drawer-close").addEventListener("click", closeAgentDrawer);
+
+  function onFilterChange() {
+    redrawEvents();
+  }
+  [fltBeacon, fltSentinel, fltAgent, fltHost].forEach(function (el) {
+    el.addEventListener("change", onFilterChange);
+    el.addEventListener("input", onFilterChange);
+  });
+  fltHeartbeats.addEventListener("change", function () {
+    // Reconnect stream so backfill policy matches the checkbox.
+    if (wantLive) startLive();
+    else redrawEvents();
   });
 
   if (token()) {

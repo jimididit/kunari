@@ -126,6 +126,30 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
+	if limit > 500 {
+		limit = 500
+	}
+	hostID := strings.TrimSpace(q.Get("host_id"))
+	excludeHB := q.Get("exclude_heartbeats") == "1" || q.Get("exclude_heartbeats") == "true"
+
+	// Filtered queries keep a sliding window of the most recent matches.
+	if hostID != "" || excludeHB {
+		matched, err := h.scanEvents(after, limit, hostID, excludeHB)
+		if err != nil {
+			h.log.Error("list events", "err", err)
+			http.Error(w, "error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"events":   matched,
+			"count":    len(matched),
+			"next_seq": h.chain.LastSeq(),
+			"last_seq": h.chain.LastSeq(),
+		})
+		return
+	}
+
 	events, next, err := event.ReadAfter(h.chain.FilePath(), after, limit)
 	if err != nil {
 		h.log.Error("list events", "err", err)
@@ -142,4 +166,40 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		"next_seq": next,
 		"last_seq": h.chain.LastSeq(),
 	})
+}
+
+// scanEvents walks the chain and returns up to limit matching events (most recent last).
+func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB bool) ([]event.Event, error) {
+	const maxScan = 10000
+	matched := make([]event.Event, 0, limit)
+	scanned := 0
+	for scanned < maxScan {
+		batch, _, err := event.ReadAfter(h.chain.FilePath(), after, 1000)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for i := range batch {
+			after = batch[i].Integrity.Seq
+			scanned++
+			if excludeHB && batch[i].TokenID == "heartbeat" {
+				continue
+			}
+			if hostID != "" {
+				if batch[i].Host == nil || batch[i].Host.ID != hostID {
+					continue
+				}
+			}
+			matched = append(matched, batch[i])
+			if len(matched) > limit {
+				matched = matched[len(matched)-limit:]
+			}
+		}
+		if len(batch) < 1000 {
+			break
+		}
+	}
+	return matched, nil
 }

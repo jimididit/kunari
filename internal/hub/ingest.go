@@ -126,7 +126,7 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	// Only token_id identifies control-plane heartbeats. Do not trust action alone:
 	// a signed ingest with action=heartbeat on a real token must still alert.
 	if ev.TokenID == "heartbeat" {
-		h.agents.NoteHeartbeat(ev)
+		recovered := h.agents.NoteHeartbeat(ev)
 		if err := h.chain.Append(ev); err != nil {
 			return err
 		}
@@ -134,6 +134,9 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 		h.mu.Lock()
 		h.hits++
 		h.mu.Unlock()
+		if recovered {
+			h.emitAgentRecovered(ev)
+		}
 		return nil
 	}
 
@@ -172,6 +175,7 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	}
 	h.mu.Lock()
 	h.hits++
+	h.alerts++
 	h.mu.Unlock()
 	return nil
 }
@@ -198,7 +202,12 @@ func (h *Hub) watchAgents(ctx context.Context) {
 
 func (h *Hub) emitMissingAgents(now time.Time) {
 	for _, rec := range h.agents.CheckMissing(now) {
-		ev := event.New(rec.ID, "hub", "agent-watch", "agent_missing")
+		tier := rec.Tier
+		if tier == "" {
+			tier = "agent-watch"
+		}
+		// token_id stays a control-plane marker so the UI token column is not a decoy id.
+		ev := event.New("agent_status", "hub", tier, "agent_missing")
 		ev.Memo = "sentinel heartbeat overdue"
 		ev.Host = &event.HostInfo{
 			ID:           rec.ID,
@@ -221,6 +230,37 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 		h.log.Info("agent missing", "agent_id", rec.ID, "hostname", rec.Hostname, "last_seen", rec.LastSeen)
 		h.mu.Lock()
 		h.hits++
+		h.alerts++
 		h.mu.Unlock()
 	}
+}
+
+func (h *Hub) emitAgentRecovered(hb *event.Event) {
+	ev := event.New("agent_status", "hub", "agent-watch", "agent_recovered")
+	ev.Memo = "sentinel heartbeat resumed"
+	if hb != nil && hb.Host != nil {
+		ev.Host = &event.HostInfo{
+			ID:           hb.Host.ID,
+			Hostname:     hb.Host.Hostname,
+			OS:           hb.Host.OS,
+			AgentVersion: hb.Host.AgentVersion,
+		}
+		if hb.DetectionTier != "" {
+			ev.DetectionTier = hb.DetectionTier
+		}
+	}
+	ev.Confidence.Action = "inferred"
+	if err := h.chain.Append(ev); err != nil {
+		h.log.Error("agent_recovered chain", "err", err)
+		return
+	}
+	h.subs.Broadcast(ev)
+	if err := h.queue.Enqueue(ev); err != nil {
+		h.log.Error("agent_recovered enqueue", "err", err)
+		return
+	}
+	h.mu.Lock()
+	h.hits++
+	h.alerts++
+	h.mu.Unlock()
 }

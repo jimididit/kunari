@@ -33,17 +33,19 @@
 
     <section id="console-view" class="console hidden">
       <div class="status-row" id="status-row" aria-live="polite">
-        <div class="stat"><span class="label">hits</span><span id="stat-hits" class="value">-</span></div>
+        <div class="stat"><span class="label">alerts</span><span id="stat-alerts" class="value">-</span></div>
+        <div class="stat"><span class="label">ingest</span><span id="stat-hits" class="value">-</span></div>
         <div class="stat"><span class="label">last seq</span><span id="stat-seq" class="value">-</span></div>
         <div class="stat"><span class="label">queue</span><span id="stat-queue" class="value">-</span></div>
         <div class="stat"><span class="label">agents</span><span id="stat-agents" class="value">-</span></div>
         <div class="stat wide"><span class="label">sinks</span><span id="stat-sinks" class="value mono">-</span></div>
       </div>
+      <p id="agents-warn" class="error tight hidden"></p>
 
       <section class="panel agents-panel">
         <div class="panel-head">
           <h2>Sentinel agents</h2>
-          <p class="lede tight">Last heartbeat from each agent. Missing means no heartbeat within the hub <code>--agent-stale-after</code> window.</p>
+          <p class="lede tight">Last heartbeat from each agent. Missing means no heartbeat within the hub <code>--agent-stale-after</code> window. Retire removes reimaged or decommissioned hosts from the board.</p>
         </div>
         <div class="table-wrap">
           <table>
@@ -53,8 +55,10 @@
                 <th>status</th>
                 <th>os</th>
                 <th>tier</th>
+                <th>version</th>
                 <th>last seen</th>
                 <th>agent id</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="agents-body"></tbody>
@@ -63,11 +67,42 @@
         <p id="agents-empty" class="empty">No heartbeating agents yet (configure sentinel <code>hub_url</code>).</p>
       </section>
 
+      <aside id="agent-drawer" class="drawer hidden" aria-live="polite">
+        <div class="drawer-head">
+          <h2 id="drawer-title">Agent</h2>
+          <button type="button" id="drawer-close" class="btn ghost">Close</button>
+        </div>
+        <dl id="drawer-meta" class="drawer-meta"></dl>
+        <h3 class="drawer-sub">Recent alerts</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>seq</th>
+                <th>time</th>
+                <th>action</th>
+                <th>path / src</th>
+                <th>memo</th>
+              </tr>
+            </thead>
+            <tbody id="drawer-events"></tbody>
+          </table>
+        </div>
+        <p id="drawer-empty" class="empty">No non-heartbeat events for this host yet.</p>
+      </aside>
+
       <div class="grid">
         <section class="panel">
           <div class="panel-head">
             <h2>Live events</h2>
-            <button type="button" id="btn-clear-events" class="btn ghost">Clear view</button>
+            <div class="filters">
+              <label class="chk"><input type="checkbox" id="flt-heartbeats"> heartbeats</label>
+              <label class="chk"><input type="checkbox" id="flt-beacon" checked> beacon</label>
+              <label class="chk"><input type="checkbox" id="flt-sentinel" checked> sentinel</label>
+              <label class="chk"><input type="checkbox" id="flt-agent" checked> agent</label>
+              <input id="flt-host" type="search" placeholder="Filter host…" aria-label="Filter by host">
+              <button type="button" id="btn-clear-events" class="btn ghost">Clear view</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
@@ -75,9 +110,10 @@
                 <tr>
                   <th>seq</th>
                   <th>time</th>
+                  <th>host</th>
                   <th>action</th>
                   <th>detector</th>
-                  <th>tier</th>
+                  <th>path / src</th>
                   <th>token</th>
                   <th>memo</th>
                 </tr>

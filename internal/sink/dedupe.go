@@ -9,6 +9,7 @@ import (
 
 type dedupeKey struct {
 	Token  string
+	Host   string
 	Actor  string
 	Action string
 }
@@ -37,7 +38,15 @@ func (t *Throttle) Allow(ev *event.Event) (allow bool, suppressed int) {
 	if ev.Actor != nil {
 		actor = ev.Actor.Exe
 	}
-	k := dedupeKey{Token: ev.TokenID, Actor: actor, Action: ev.Action}
+	host := ""
+	if ev.Host != nil {
+		if ev.Host.ID != "" {
+			host = ev.Host.ID
+		} else {
+			host = ev.Host.Hostname
+		}
+	}
+	k := dedupeKey{Token: ev.TokenID, Host: host, Actor: actor, Action: ev.Action}
 	now := time.Now()
 	if prev, ok := t.last[k]; ok && now.Sub(prev) < t.window {
 		t.suppressed[k]++
