@@ -144,3 +144,59 @@ func TestAgentKeyFallback(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestParseHeartbeatMeta(t *testing.T) {
+	meta, ok := parseHeartbeatMeta("heartbeat;every=60s;watches=2;caps=open/read; needs admin")
+	if !ok || !meta.HasWatches || meta.Watches != 2 || meta.Caps != "open/read; needs admin" {
+		t.Fatalf("got ok=%v meta=%+v", ok, meta)
+	}
+	capsOnly, ok := parseHeartbeatMeta("heartbeat;every=60s;caps=open/read")
+	if !ok || capsOnly.HasWatches || capsOnly.Caps != "open/read" {
+		t.Fatalf("caps-only got ok=%v meta=%+v", ok, capsOnly)
+	}
+	if _, ok := parseHeartbeatMeta("heartbeat;every=60s"); ok {
+		t.Fatal("expected no meta")
+	}
+}
+
+func TestNoteHeartbeatStoresCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := newAgentTracker(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev.Memo = "heartbeat;every=60s;watches=1;caps=open/read via 4663; needs SACL"
+	tr.NoteHeartbeat(ev)
+	snap := tr.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("got %d", len(snap))
+	}
+	if snap[0].WatchCount != 1 || snap[0].Capabilities != "open/read via 4663; needs SACL" {
+		t.Fatalf("watches=%d caps=%q", snap[0].WatchCount, snap[0].Capabilities)
+	}
+	if snap[0].Tier != "win-sacl-4663" {
+		t.Fatalf("tier %q", snap[0].Tier)
+	}
+	ev2 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev2.Memo = "heartbeat;every=60s;watches=0;caps=idle"
+	tr.NoteHeartbeat(ev2)
+	snap = tr.Snapshot()
+	if snap[0].WatchCount != 0 {
+		t.Fatalf("expected watches cleared to 0, got %d", snap[0].WatchCount)
+	}
+	ev3 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev3.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev3.Memo = "heartbeat;every=60s;watches=3;caps=open/read"
+	tr.NoteHeartbeat(ev3)
+	ev4 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev4.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev4.Memo = "heartbeat;every=60s;caps=open/read only"
+	tr.NoteHeartbeat(ev4)
+	snap = tr.Snapshot()
+	if snap[0].WatchCount != 3 {
+		t.Fatalf("caps-only must not clear watches; got %d", snap[0].WatchCount)
+	}
+}

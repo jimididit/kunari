@@ -81,6 +81,11 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if restorer, ok := w.(interface{ RestoreSeen(string) error }); ok {
+		if err := restorer.RestoreSeen(cfg.DataDir); err != nil {
+			log.Debug("watcher seen-state restore", "err", err)
+		}
+	}
 	byPath := map[string]Target{}
 	for _, t := range cfg.Targets {
 		byPath[filepath.Clean(t.Path)] = t
@@ -231,10 +236,13 @@ func (r *Runner) handleTouch(ctx context.Context, t Touch) {
 
 func (r *Runner) emitHeartbeat(ctx context.Context, drift bool) {
 	ev := event.New("heartbeat", "sentinel", string(r.Watcher.Tier()), "heartbeat")
-	ev.Memo = "heartbeat;every=" + r.Cfg.HeartbeatEvery
+	prefix := "heartbeat"
 	if drift {
-		ev.Memo = "config_drift;every=" + r.Cfg.HeartbeatEvery
+		prefix = "config_drift"
 	}
+	// caps= is last so capability text may contain semicolons without breaking watches=.
+	ev.Memo = fmt.Sprintf("%s;every=%s;watches=%d;caps=%s",
+		prefix, r.Cfg.HeartbeatEvery, len(r.Cfg.Targets), r.Watcher.Capabilities())
 	ev.Host = r.hostInfo()
 	ev.File = &event.FileInfo{Path: "watcher:" + r.Watcher.ConfigHash()}
 	ev.Confidence.Action = "proven"
@@ -259,6 +267,7 @@ func (r *Runner) hostInfo() *event.HostInfo {
 		ID:           r.agentID,
 		Hostname:     hn,
 		OS:           runtime.GOOS,
+		OSVersion:    runtime.GOOS + "/" + runtime.GOARCH,
 		AgentVersion: r.Cfg.AgentVersion,
 		Engagement:   r.Cfg.Engagement,
 		AgentLabel:   r.Cfg.AgentLabel,

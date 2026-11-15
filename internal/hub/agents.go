@@ -20,6 +20,8 @@ type agentView struct {
 	Hostname     string    `json:"hostname,omitempty"`
 	OS           string    `json:"os,omitempty"`
 	Tier         string    `json:"tier,omitempty"`
+	Capabilities string    `json:"capabilities,omitempty"`
+	WatchCount   int       `json:"watch_count"`
 	AgentVersion string    `json:"agent_version,omitempty"`
 	Engagement   string    `json:"engagement,omitempty"`
 	AgentLabel   string    `json:"agent_label,omitempty"`
@@ -34,6 +36,8 @@ type agentRecord struct {
 	Hostname        string    `json:"hostname,omitempty"`
 	OS              string    `json:"os,omitempty"`
 	Tier            string    `json:"tier,omitempty"`
+	Capabilities    string    `json:"capabilities,omitempty"`
+	WatchCount      int       `json:"watch_count,omitempty"`
 	AgentVersion    string    `json:"agent_version,omitempty"`
 	Engagement      string    `json:"engagement,omitempty"`
 	AgentLabel      string    `json:"agent_label,omitempty"`
@@ -145,6 +149,15 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 	}
 	if ev.DetectionTier != "" {
 		rec.Tier = ev.DetectionTier
+	}
+	if meta, ok := parseHeartbeatMeta(ev.Memo); ok {
+		if meta.Caps != "" {
+			rec.Capabilities = meta.Caps
+		}
+		// Apply watches only when the key is present (including 0); caps-only must not clear it.
+		if meta.HasWatches {
+			rec.WatchCount = meta.Watches
+		}
 	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
@@ -296,6 +309,8 @@ func (t *agentTracker) Snapshot() []agentView {
 			Hostname:     rec.Hostname,
 			OS:           rec.OS,
 			Tier:         rec.Tier,
+			Capabilities: rec.Capabilities,
+			WatchCount:   rec.WatchCount,
 			AgentVersion: rec.AgentVersion,
 			Engagement:   rec.Engagement,
 			AgentLabel:   rec.AgentLabel,
@@ -343,6 +358,46 @@ func (t *agentTracker) load() error {
 		t.byID[rec.ID] = &cp
 	}
 	return nil
+}
+
+type heartbeatMeta struct {
+	Caps       string
+	Watches    int
+	HasWatches bool
+}
+
+// parseHeartbeatMeta extracts watches=N and caps=... from a sentinel heartbeat memo.
+// caps= is expected last so capability text may contain semicolons.
+func parseHeartbeatMeta(memo string) (heartbeatMeta, bool) {
+	var meta heartbeatMeta
+	if memo == "" {
+		return meta, false
+	}
+	found := false
+	if i := strings.Index(memo, "watches="); i >= 0 {
+		rest := memo[i+len("watches="):]
+		n := 0
+		digits := 0
+		for _, r := range rest {
+			if r < '0' || r > '9' {
+				break
+			}
+			n = n*10 + int(r-'0')
+			digits++
+		}
+		if digits > 0 {
+			meta.Watches = n
+			meta.HasWatches = true
+			found = true
+		}
+	}
+	if i := strings.Index(memo, "caps="); i >= 0 {
+		meta.Caps = strings.TrimSpace(memo[i+len("caps="):])
+		if meta.Caps != "" {
+			found = true
+		}
+	}
+	return meta, found
 }
 
 func (t *agentTracker) persistLocked() error {

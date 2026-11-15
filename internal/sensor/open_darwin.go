@@ -2,7 +2,10 @@
 
 package sensor
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+)
 
 func OpenBest(targets []Target, preferTiers []string) (Watcher, error) {
 	_ = preferTiers
@@ -13,11 +16,13 @@ func OpenBest(targets []Target, preferTiers []string) (Watcher, error) {
 	if esErr == nil {
 		return w, nil
 	}
+	esMsg := esErr.Error()
 	fw, fsErr := newFSEvents(targets)
 	if fsErr == nil {
+		slog.Warn("mac-eslogger unavailable; falling back to mac-fsevents (no open/read)", "eslogger_err", esMsg)
 		return fw, nil
 	}
-	return nil, fmt.Errorf("eslogger: %v; fsevents: %w", esErr, fsErr)
+	return nil, fmt.Errorf("eslogger: %s; fsevents: %w", esMsg, fsErr)
 }
 
 func PlatformInstallHints(targets []Target) string {

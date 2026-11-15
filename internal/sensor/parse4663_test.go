@@ -3,6 +3,8 @@
 package sensor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,6 +15,7 @@ Event[0]
   Object Name: C:\lab\canary.env
   Access Mask: 0x1
   Process Name: C:\Windows\System32\notepad.exe
+  Event Record ID: 42
 `
 	targets := []Target{{Path: `C:\lab\canary.env`, TokenID: "abc"}}
 	got := parse4663(raw, targets)
@@ -24,6 +27,53 @@ Event[0]
 	}
 	if got[0].Extra["process_name"] != `C:\Windows\System32\notepad.exe` {
 		t.Fatalf("process %q", got[0].Extra["process_name"])
+	}
+	if got[0].Extra["event_record_id"] != "42" {
+		t.Fatalf("record id %q", got[0].Extra["event_record_id"])
+	}
+}
+
+func TestParse4663XML(t *testing.T) {
+	raw := `<?xml version="1.0"?>
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <EventID>4663</EventID>
+    <EventRecordID>1001</EventRecordID>
+    <TimeCreated SystemTime="2026-11-15T12:00:00.000000000Z"/>
+  </System>
+  <EventData>
+    <Data Name="ObjectName">\\?\C:\lab\decoy.env</Data>
+    <Data Name="AccessMask">0x1</Data>
+    <Data Name="ProcessName">C:\Windows\System32\notepad.exe</Data>
+  </EventData>
+</Event>
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <EventID>4663</EventID>
+    <EventRecordID>1002</EventRecordID>
+    <TimeCreated SystemTime="2026-11-15T12:01:00Z"/>
+  </System>
+  <EventData>
+    <Data Name="ObjectName">C:\lab\decoy.env</Data>
+    <Data Name="AccessMask">0x1</Data>
+    <Data Name="ProcessName">C:\Windows\System32\notepad.exe</Data>
+  </EventData>
+</Event>`
+	got := parse4663(raw, []Target{{Path: `C:\lab\decoy.env`, TokenID: "abc"}})
+	if len(got) != 2 {
+		t.Fatalf("got %d", len(got))
+	}
+	if got[0].Action != "read" || got[1].Action != "read" {
+		t.Fatalf("actions %s %s", got[0].Action, got[1].Action)
+	}
+	if got[0].Extra["event_record_id"] != "1001" || got[1].Extra["event_record_id"] != "1002" {
+		t.Fatalf("ids %q %q", got[0].Extra["event_record_id"], got[1].Extra["event_record_id"])
+	}
+	if got[0].Extra["event_time"] == "" || got[1].Extra["event_time"] == "" {
+		t.Fatal("expected event_time from TimeCreated")
+	}
+	if ts, ok := touchEventTime(got[0]); !ok || ts.Year() != 2026 {
+		t.Fatalf("touchEventTime got %v ok=%v", ts, ok)
 	}
 }
 
@@ -81,11 +131,84 @@ func TestXPath4663FiltersObjectName(t *testing.T) {
 	if !strings.Contains(q, `ObjectName']='C:\lab\canary.env'`) {
 		t.Fatalf("query %s", q)
 	}
+	if !strings.Contains(q, `ObjectName']='\\?\C:\lab\canary.env'`) {
+		t.Fatalf("query missing long-path variant: %s", q)
+	}
 	if !strings.Contains(q, "EventID=4663") {
 		t.Fatalf("query %s", q)
 	}
 	if _, err := xpath4663([]Target{{Path: `C:\lab\canary.env'`}}); err == nil {
 		t.Fatal("expected reject for quote in path")
+	}
+	unc, err := xpath4663([]Target{{Path: `\\server\share\decoy.env`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unc, `ObjectName']='\\server\share\decoy.env'`) {
+		t.Fatalf("unc query %s", unc)
+	}
+	if !strings.Contains(unc, `ObjectName']='\\?\UNC\server\share\decoy.env'`) {
+		t.Fatalf("unc long variant missing: %s", unc)
+	}
+	if strings.Contains(unc, `ObjectName']='\\?\\server`) {
+		t.Fatalf("broken unc long path: %s", unc)
+	}
+}
+
+func TestRememberRecordAllowsRepeatReads(t *testing.T) {
+	w := &event4663Watcher{seen: map[string]struct{}{}}
+	if w.rememberRecord("1") {
+		t.Fatal("first sighting should be new")
+	}
+	if !w.rememberRecord("1") {
+		t.Fatal("same record id should be seen")
+	}
+	if w.rememberRecord("2") {
+		t.Fatal("different record id should be new (repeat read)")
+	}
+}
+
+func TestRestoreSeenLoadsMaxRecordID(t *testing.T) {
+	dir := t.TempDir()
+	w := &event4663Watcher{seen: map[string]struct{}{}, hash: "abcdabcdabcdabcdffff"}
+	path := filepath.Join(dir, event4663MaxIDFile+".abcdabcdabcdabcd")
+	if err := os.WriteFile(path, []byte("42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RestoreSeen(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !w.haveMax || w.maxID != 42 {
+		t.Fatalf("haveMax=%v maxID=%d", w.haveMax, w.maxID)
+	}
+}
+
+func TestNormalizeWinPathStripsLongPrefix(t *testing.T) {
+	if got := normalizeWinPath(`\\?\C:\Lab\Decoy.env`); got != `c:\lab\decoy.env` {
+		t.Fatalf("got %q", got)
+	}
+	if got := normalizeWinPath(`\\?\UNC\server\share\decoy.env`); got != `\\server\share\decoy.env` {
+		t.Fatalf("unc got %q", got)
+	}
+}
+
+func TestParse4663XMLSingleQuotedAttrs(t *testing.T) {
+	raw := `<Event><System><EventRecordID>9</EventRecordID></System>` +
+		`<EventData><Data Name='ObjectName'>C:\lab\decoy.env</Data>` +
+		`<Data Name='AccessMask'>0x1</Data></EventData></Event>`
+	got := parse4663(raw, []Target{{Path: `C:\lab\decoy.env`, TokenID: "abc"}})
+	if len(got) != 1 || got[0].Action != "read" || got[0].Extra["event_record_id"] != "9" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestParse4663XMLUnescapesObjectName(t *testing.T) {
+	raw := `<Event><System><EventRecordID>3</EventRecordID></System>` +
+		`<EventData><Data Name="ObjectName">C:\lab\a&amp;b.env</Data>` +
+		`<Data Name="AccessMask">0x1</Data></EventData></Event>`
+	got := parse4663(raw, []Target{{Path: `C:\lab\a&b.env`, TokenID: "abc"}})
+	if len(got) != 1 || got[0].Path != `C:\lab\a&b.env` {
+		t.Fatalf("got %+v", got)
 	}
 }
 
