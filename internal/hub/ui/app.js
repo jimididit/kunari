@@ -226,6 +226,8 @@
       ["status", a.missing ? "missing" : "ok"],
       ["os", a.os || ""],
       ["tier", a.tier || ""],
+      ["watches", a.watch_count ? String(a.watch_count) : ""],
+      ["capabilities", a.capabilities || ""],
       ["version", a.agent_version || ""],
       ["last seen", fmtTime(a.last_seen) + (a.last_seen ? " (" + fmtRelative(a.last_seen) + ")" : "")],
     ];
@@ -334,6 +336,8 @@
           a.missing ? "missing" : "ok",
           a.os || "",
           a.tier || "",
+          a.watch_count ? String(a.watch_count) : "",
+          a.capabilities || "",
           a.agent_version || "",
           fmtRelative(a.last_seen),
           shortID(a.id),
@@ -346,8 +350,12 @@
             pill.textContent = cells[k];
             td.appendChild(pill);
           } else {
-            if (k === 7) td.title = fmtTime(a.last_seen);
-            if (k === 8) {
+            if (k === 7) {
+              td.title = a.capabilities || "";
+              td.className = "caps";
+            }
+            if (k === 9) td.title = fmtTime(a.last_seen);
+            if (k === 10) {
               td.className = "mono";
               td.title = a.id || "";
             }

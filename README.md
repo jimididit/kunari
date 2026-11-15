@@ -142,9 +142,25 @@ Kunari has two layers. You can use either or both on an authorized host.
 1. **Beacon** - A forged decoy that contacts your hub over HTTPS or DNS when something uses it in a way that triggers the embedded beacon. The decoy file can sit alone on the endpoint; forge and hub stay on your infrastructure. This does not see every filesystem touch - only those network fetches.
 2. **Sentinel** - An on-host `kunari sentinel` process that watches decoy paths with the best available OS mechanism (tier varies by platform and privilege). On Windows the default order is `win-sacl-4663` (lab-proven), then experimental `win-etw-kernel-file` (needs elevation; lab not yet proven), then `win-rdc`. Forge with `--detect both` if you want beacon and sentinel together.
 
+### Sentinel tier capability matrix
+
+Do not treat every tier as full open/read with process attribution. Heartbeats carry `caps=` and `watches=` so the hub UI can show what the armed tier actually proves.
+
+| Tier | Open/read | Modify/delete | PID / process | Status |
+|---|---|---|---|---|
+| `win-sacl-4663` | yes | yes | process name | lab-proven |
+| `win-etw-kernel-file` | candidate | candidate | yes | experimental / NV |
+| `win-rdc` | no | yes | no | change-notify only |
+| `fanotify` | yes | yes | yes | lab-proven (elevated) |
+| `inotify` | yes | yes | no | Linux fallback |
+| `mac-eslogger` | yes | yes | yes | needs FDA + root; NV in CI |
+| `mac-fsevents` | no | yes | no | macOS fallback |
+
+`auditd` rules may appear in Linux install hints; they are **not** an OpenBest armed tier.
+
 Placing a decoy without a sentinel is not the same as running a sentinel. For production beacons, point `--collector` at a reachable HTTPS hub hostname (not `127.0.0.1`) and terminate TLS in front of the hub ([examples/tls-hub](examples/tls-hub/README.md)). Optional DNS beacons use `--collector-dns` with a zone you control ([examples/dns-hub](examples/dns-hub/README.md)). Keep `ingest.secret`, `api.token`, and signing keys out of forged artifacts.
 
-To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), forge with `--detect both`, then `kunari package agent`; put a matching release binary in the package `bin/` directory (rename it if you pass `--binary-name`), then run the generated install script on the endpoint. Optional packaging knobs: `--binary-name`, `--unit-name` (systemd / launchd / scheduled task), `--prefix`. Well-known OS process and service names are denied. The package `DEPLOY.md` repeats dual-layer guidance. Linux defaults to `/opt/kunari-agent` (not under `/home`). Windows registers a SYSTEM scheduled task - the package binary is not a Windows Service binary.
+To stage an authorized **agent** install (sentinel + decoy + install script for linux/windows/darwin), forge with `--detect both`, then `kunari package agent`; put a matching release binary in the package `bin/` directory (rename it if you pass `--binary-name`), then run the generated install script on the endpoint. Optional packaging knobs: `--binary-name`, `--unit-name` (systemd / launchd / scheduled task), `--prefix`, `--visible-under`, `--client-bundle`. Well-known OS process and service names are denied. The package `DEPLOY.md` repeats dual-layer guidance. Linux defaults to `/opt/kunari-agent` (not under `/home`); without `CAP_SYS_ADMIN` the sentinel falls back to inotify. Windows registers a SYSTEM scheduled task - the package binary is not a Windows Service binary.
 
 Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 

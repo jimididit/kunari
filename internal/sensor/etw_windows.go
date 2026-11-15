@@ -38,6 +38,7 @@ type etwWatcher struct {
 
 	mu     sync.Mutex
 	byObj  map[string]string // FileObject/FileKey -> path (matched targets only)
+	objQ   []string          // FIFO insert order for soft-cap eviction
 	closed bool
 }
 
@@ -233,11 +234,17 @@ func (w *etwWatcher) lookupObj(obj string) string {
 func (w *etwWatcher) rememberObj(obj, path string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.byObj) >= etwMaxObjCache {
-		// Soft cap: drop all rather than grow without bound under handle churn.
-		w.byObj = map[string]string{}
+	if _, ok := w.byObj[obj]; ok {
+		w.byObj[obj] = path
+		return
+	}
+	for len(w.byObj) >= etwMaxObjCache && len(w.objQ) > 0 {
+		old := w.objQ[0]
+		w.objQ = w.objQ[1:]
+		delete(w.byObj, old)
 	}
 	w.byObj[obj] = path
+	w.objQ = append(w.objQ, obj)
 }
 
 func (w *etwWatcher) forgetObj(obj string) {

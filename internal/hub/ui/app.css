@@ -351,6 +351,14 @@ th {
 }
 
 td.mono, .mono { font-family: var(--font-mono); font-size: 0.82rem; }
+td.caps {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--muted, #6b7280);
+}
 
 .empty {
   margin: 0.75rem 0 0;

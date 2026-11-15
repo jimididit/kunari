@@ -79,11 +79,11 @@ Protect this bundle in transit; it contains hub ingest material.
 4. Confirm hub reachability and touch the decoy in a lab first.
 
 Notes:
-- Linux: install under /opt (not /home); the systemd unit runs as user kunari.
+- Linux: install under /opt (not /home); the systemd unit runs as user kunari. Without CAP_SYS_ADMIN the sentinel falls back to inotify (open/read/modify, no PID); fanotify is preferred when elevated.
 - Windows: install.ps1 registers a SYSTEM scheduled task (ONSTART). The package binary is not a Windows Service binary, so sc.exe create will time out.
 - Persistence name for this package: %s.
 - Optional OPSEC knobs at package time: `+"`--binary-name`"+`, `+"`--unit-name`"+`, `+"`--prefix`"+`. Do not choose names that impersonate OS components (denied by the packager).
-- Human-visible decoy: `+"`--visible-under Work/Finance`"+` installs and watches under the interactive user's Documents; secrets stay under the private prefix. Windows also applies the File System audit SACL at install. Install refuses symlink/junction components under Documents.
+- Human-visible decoy: `+"`--visible-under Work/Finance`"+` installs and watches under the interactive user's Documents; secrets stay under the private prefix. Windows enables File System audit policy at install; the elevated sentinel applies the per-file SACL at startup. Install refuses symlink/junction components under Documents.
 - Client handoff: `+"`--client-bundle`"+` omits this DEPLOY.md and bin/README.txt.
 - Uninstall: run uninstall.sh / uninstall.ps1 from the same package (elevated); visible-path uninstall skips symlinks/reparse points.
 - Hub: with hub push configured, silence longer than `+"`--agent-stale-after`"+` emits `+"`agent_missing`"+` (time-to-notice, not stealth).

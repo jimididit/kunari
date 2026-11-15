@@ -14,10 +14,13 @@ import (
 	"time"
 )
 
+const event4663SeenCap = 4096
+
 type event4663Watcher struct {
 	targets []Target
 	hash    string
 	seen    map[string]struct{}
+	seenQ   []string
 }
 
 func newEvent4663(targets []Target) (*event4663Watcher, error) {
@@ -29,7 +32,7 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 		if err := ensureFileSystemAuditACE(t.Path); err != nil {
 			return nil, fmt.Errorf("SACL on %s: %w", t.Path, err)
 		}
-		parts = append(parts, strings.ToLower(filepath.Clean(t.Path))+"|"+t.TokenID)
+		parts = append(parts, normalizeWinPath(t.Path)+"|"+t.TokenID)
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, ";") + "|win-sacl-4663"))
 	return &event4663Watcher{
@@ -63,6 +66,23 @@ func (w *event4663Watcher) Capabilities() string {
 func (w *event4663Watcher) ConfigHash() string { return w.hash }
 func (w *event4663Watcher) Close() error       { return nil }
 
+func (w *event4663Watcher) rememberRecord(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, ok := w.seen[id]; ok {
+		return true
+	}
+	if len(w.seenQ) >= event4663SeenCap {
+		old := w.seenQ[0]
+		w.seenQ = w.seenQ[1:]
+		delete(w.seen, old)
+	}
+	w.seen[id] = struct{}{}
+	w.seenQ = append(w.seenQ, id)
+	return false
+}
+
 func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 	if err := probe4663(); err != nil {
 		return fmt.Errorf("security log 4663 probe: %w", err)
@@ -79,11 +99,17 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 				continue
 			}
 			for _, touch := range parse4663(raw, w.targets) {
-				key := touch.Path + "|" + touch.Action + "|" + touch.Extra["access_mask"]
-				if _, ok := w.seen[key]; ok {
+				key := ""
+				if touch.Extra != nil {
+					key = touch.Extra["event_record_id"]
+				}
+				if key == "" {
+					// Should not happen with XML queries; skip rather than path-dedupe forever.
 					continue
 				}
-				w.seen[key] = struct{}{}
+				if w.rememberRecord(key) {
+					continue
+				}
 				select {
 				case out <- touch:
 				case <-ctx.Done():
@@ -95,7 +121,7 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 }
 
 func probe4663() error {
-	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:1", "/rd:true", "/f:text")
+	cmd := exec.Command("wevtutil", "qe", "Security", "/q:*[System[(EventID=4663)]]", "/c:1", "/rd:true", "/f:xml")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, truncate(string(out), 200))
@@ -113,7 +139,7 @@ func queryRecent4663(targets []Target) (string, error) {
 	}
 	// exec.Command does not invoke a shell. The XPath is a fixed template plus
 	// paths limited to safeObjectName.
-	cmd := exec.Command("wevtutil", "qe", "Security", "/q:"+xpath, "/c:30", "/rd:true", "/f:text") // #nosec G204 -- argv, not a shell; path charset-checked
+	cmd := exec.Command("wevtutil", "qe", "Security", "/q:"+xpath, "/c:100", "/rd:true", "/f:xml") // #nosec G204 -- argv, not a shell; path charset-checked
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, truncate(string(out), 200))
@@ -124,15 +150,36 @@ func queryRecent4663(targets []Target) (string, error) {
 func xpath4663(targets []Target) (string, error) {
 	var parts []string
 	for _, t := range targets {
-		if !safeObjectName(t.Path) {
-			return "", fmt.Errorf("target path %q cannot be embedded in an XPath query", t.Path)
+		variants := winObjectNameVariants(t.Path)
+		for _, p := range variants {
+			if !safeObjectName(p) {
+				return "", fmt.Errorf("target path %q cannot be embedded in an XPath query", p)
+			}
+			parts = append(parts, "EventData[Data[@Name='ObjectName']='"+p+"']")
 		}
-		parts = append(parts, "EventData[Data[@Name='ObjectName']='"+t.Path+"']")
 	}
 	if len(parts) == 0 {
 		return "", fmt.Errorf("no targets")
 	}
 	return "*[System[(EventID=4663)] and (" + strings.Join(parts, " or ") + ")]", nil
+}
+
+func winObjectNameVariants(p string) []string {
+	n := strings.TrimSpace(p)
+	n = strings.TrimPrefix(n, `\\?\`)
+	n = filepath.Clean(n)
+	out := []string{n}
+	long := `\\?\` + n
+	if long != n {
+		out = append(out, long)
+	}
+	return out
+}
+
+func normalizeWinPath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.TrimPrefix(p, `\\?\`)
+	return strings.ToLower(filepath.Clean(p))
 }
 
 func isHex(b byte) bool {
@@ -146,7 +193,7 @@ func safeObjectName(p string) bool {
 	for _, r := range p {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '\\' || r == ':' || r == '.' || r == '_' || r == '-' || r == ' ' || r == '(' || r == ')':
+		case r == '\\' || r == ':' || r == '.' || r == '_' || r == '-' || r == ' ' || r == '(' || r == ')' || r == '?':
 		default:
 			return false
 		}
@@ -155,9 +202,114 @@ func safeObjectName(p string) bool {
 }
 
 func parse4663(raw string, targets []Target) []Touch {
+	if strings.Contains(raw, "<Event") {
+		return parse4663XML(raw, targets)
+	}
+	return parse4663Text(raw, targets)
+}
+
+func parse4663XML(raw string, targets []Target) []Touch {
 	want := map[string]Target{}
 	for _, t := range targets {
-		want[strings.ToLower(filepath.Clean(t.Path))] = t
+		want[normalizeWinPath(t.Path)] = t
+	}
+	var touches []Touch
+	chunks := splitXMLEvents(raw)
+	for _, block := range chunks {
+		recID := xmlTagText(block, "EventRecordID")
+		path := xmlDataNamed(block, "ObjectName")
+		if path == "" {
+			continue
+		}
+		key := normalizeWinPath(path)
+		if _, ok := want[key]; !ok {
+			continue
+		}
+		mask := xmlDataNamed(block, "AccessMask")
+		accesses := xmlDataNamed(block, "AccessList")
+		proc := xmlDataNamed(block, "ProcessName")
+		action := mapAccessMask(mask)
+		if action == "open" {
+			if fromList := mapAccessList(accesses); fromList != "" {
+				action = fromList
+			}
+		}
+		extra := map[string]string{
+			"access_mask":     strings.TrimSpace(mask),
+			"process_name":    strings.TrimSpace(proc),
+			"event_record_id": strings.TrimSpace(recID),
+		}
+		touches = append(touches, Touch{
+			Path:     path,
+			Action:   action,
+			Occurred: time.Now().UTC(),
+			Proven:   true,
+			Extra:    extra,
+		})
+	}
+	return touches
+}
+
+func splitXMLEvents(raw string) []string {
+	const start = "<Event"
+	var out []string
+	rest := raw
+	for {
+		i := strings.Index(rest, start)
+		if i < 0 {
+			break
+		}
+		rest = rest[i:]
+		end := strings.Index(rest, "</Event>")
+		if end < 0 {
+			out = append(out, rest)
+			break
+		}
+		out = append(out, rest[:end+len("</Event>")])
+		rest = rest[end+len("</Event>"):]
+	}
+	return out
+}
+
+func xmlTagText(block, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	i := strings.Index(block, open)
+	if i < 0 {
+		return ""
+	}
+	rest := block[i+len(open):]
+	j := strings.Index(rest, close)
+	if j < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:j])
+}
+
+func xmlDataNamed(block, name string) string {
+	// <Data Name="ObjectName">value</Data> (attribute order may vary slightly)
+	needle := `Name="` + name + `"`
+	i := strings.Index(block, needle)
+	if i < 0 {
+		return ""
+	}
+	rest := block[i+len(needle):]
+	gt := strings.Index(rest, ">")
+	if gt < 0 {
+		return ""
+	}
+	rest = rest[gt+1:]
+	end := strings.Index(rest, "</Data>")
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
+}
+
+func parse4663Text(raw string, targets []Target) []Touch {
+	want := map[string]Target{}
+	for _, t := range targets {
+		want[normalizeWinPath(t.Path)] = t
 	}
 	var touches []Touch
 	blocks := strings.Split(raw, "Event[")
@@ -170,7 +322,7 @@ func parse4663(raw string, targets []Target) []Touch {
 			continue
 		}
 		path = strings.TrimSpace(path)
-		key := strings.ToLower(filepath.Clean(path))
+		key := normalizeWinPath(path)
 		if _, ok := want[key]; !ok {
 			continue
 		}
@@ -182,6 +334,10 @@ func parse4663(raw string, targets []Target) []Touch {
 		proc := findField(block, "Process Name:")
 		if proc == "" {
 			proc = findField(block, "ProcessName:")
+		}
+		recID := findField(block, "Event Record ID:")
+		if recID == "" {
+			recID = findField(block, "EventRecordID:")
 		}
 		action := mapAccessMask(mask)
 		if action == "open" {
@@ -195,8 +351,9 @@ func parse4663(raw string, targets []Target) []Touch {
 			Occurred: time.Now().UTC(),
 			Proven:   true,
 			Extra: map[string]string{
-				"access_mask":  strings.TrimSpace(mask),
-				"process_name": strings.TrimSpace(proc),
+				"access_mask":     strings.TrimSpace(mask),
+				"process_name":    strings.TrimSpace(proc),
+				"event_record_id": strings.TrimSpace(recID),
 			},
 		})
 	}

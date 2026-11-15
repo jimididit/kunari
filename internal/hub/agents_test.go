@@ -144,3 +144,35 @@ func TestAgentKeyFallback(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestParseHeartbeatMeta(t *testing.T) {
+	caps, watches, ok := parseHeartbeatMeta("heartbeat;every=60s;watches=2;caps=open/read; needs admin")
+	if !ok || watches != 2 || caps != "open/read; needs admin" {
+		t.Fatalf("got ok=%v watches=%d caps=%q", ok, watches, caps)
+	}
+	if _, _, ok := parseHeartbeatMeta("heartbeat;every=60s"); ok {
+		t.Fatal("expected no meta")
+	}
+}
+
+func TestNoteHeartbeatStoresCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := newAgentTracker(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev.Memo = "heartbeat;every=60s;watches=1;caps=open/read via 4663; needs SACL"
+	tr.NoteHeartbeat(ev)
+	snap := tr.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("got %d", len(snap))
+	}
+	if snap[0].WatchCount != 1 || snap[0].Capabilities != "open/read via 4663; needs SACL" {
+		t.Fatalf("watches=%d caps=%q", snap[0].WatchCount, snap[0].Capabilities)
+	}
+	if snap[0].Tier != "win-sacl-4663" {
+		t.Fatalf("tier %q", snap[0].Tier)
+	}
+}

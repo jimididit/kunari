@@ -98,11 +98,12 @@ func (w *inotifyWatcher) Run(ctx context.Context, out chan<- Touch) error {
 }
 
 func mapInMask(mask uint32) string {
+	// Prefer ACCESS over OPEN so a read is labeled "read" (matches fanotify honesty).
 	switch {
-	case mask&unix.IN_OPEN != 0:
-		return "open"
 	case mask&unix.IN_ACCESS != 0:
 		return "read"
+	case mask&unix.IN_OPEN != 0:
+		return "open"
 	case mask&unix.IN_MODIFY != 0 || mask&unix.IN_CLOSE_WRITE != 0:
 		return "modify"
 	case mask&unix.IN_DELETE_SELF != 0:
