@@ -224,7 +224,16 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 		out = out[:limit]
 	}
 	if changed {
-		_ = s.persistLocked()
+		if err := s.persistLocked(); err != nil {
+			// Unclaim so a disk failure does not leave phantom inflight leases in memory only.
+			for i := range out {
+				if stored := s.jobs[out[i].ID]; stored != nil && stored.Status == jobStatusInflight {
+					stored.Status = jobStatusQueued
+					stored.DeliveredAt = nil
+				}
+			}
+			return nil, err
+		}
 	}
 	return out, nil
 }

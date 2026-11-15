@@ -147,25 +147,26 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := "operator"
-	// ack_missing is hub-side: apply AckMissing before enqueue so a rejected ack
-	// never leaves a durable "acked" job behind.
-	if strings.TrimSpace(req.Verb) == VerbAckMissing {
-		if h.agents == nil {
-			http.Error(w, "agent watch disabled", http.StatusBadRequest)
-			return
-		}
-		h.agentMu.Lock()
-		err := h.agents.AckMissing(agentID)
-		h.agentMu.Unlock()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	if strings.TrimSpace(req.Verb) == VerbAckMissing && h.agents == nil {
+		http.Error(w, "agent watch disabled", http.StatusBadRequest)
+		return
 	}
 	j, err := h.jobs.Enqueue(agentID, req.Verb, actor, req.Args)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// ack_missing is hub-side: clear Missing after the audit row exists. On failure,
+	// mark the job failed so it is not left as a successful ack.
+	if j.Verb == VerbAckMissing {
+		h.agentMu.Lock()
+		ackErr := h.agents.AckMissing(agentID)
+		h.agentMu.Unlock()
+		if ackErr != nil {
+			_, _ = h.jobs.Complete(agentID, j.ID, "", ackErr.Error())
+			http.Error(w, ackErr.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
