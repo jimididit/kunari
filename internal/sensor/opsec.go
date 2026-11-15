@@ -18,6 +18,11 @@ func HardenSensitivePaths(configPath string, cfg *Config) error {
 			return fmt.Errorf("sentinel data_dir: %w", err)
 		}
 	}
+	if cfg.HubPubKeyFile != "" {
+		if err := hardenPrivateFile(cfg.HubPubKeyFile); err != nil {
+			return fmt.Errorf("hub_pubkey_file: %w", err)
+		}
+	}
 	if cfg.HubSecretFile != "" {
 		if err := hardenPrivateFile(cfg.HubSecretFile); err != nil {
 			return fmt.Errorf("hub_secret_file: %w", err)

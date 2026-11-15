@@ -1,36 +1,48 @@
 package sensor
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
+
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 )
 
 func TestVerifyJobAllowlistAndSig(t *testing.T) {
-	secret := []byte("0123456789abcdef0123456789abcdef")
-	r := &Runner{agentID: "a1", hubSecret: secret}
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Runner{agentID: "a1", hubPubKey: keys.Public}
 	args := json.RawMessage(`{}`)
 	exp := time.Now().UTC().Add(time.Minute)
 	j := controlJob{
 		ID: "job-1", AgentID: "a1", Verb: verbStatusDump,
 		Args: args, ExpiresAt: exp,
 	}
-	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
-	j.Sig = "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, string(args), exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Sig = "ed25519=" + hex.EncodeToString(keys.Sign(payload))
 	if err := r.verifyJob(&j); err != nil {
 		t.Fatal(err)
 	}
 	j.Verb = "shell_exec"
-	payload2 := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
-	mac2 := hmac.New(sha256.New, secret)
-	mac2.Write([]byte(payload2))
-	j.Sig = "sha256=" + hex.EncodeToString(mac2.Sum(nil))
+	payload2, _ := jobSignPayload(j.ID, j.AgentID, j.Verb, string(args), exp)
+	j.Sig = "ed25519=" + hex.EncodeToString(keys.Sign(payload2))
 	if err := r.verifyJob(&j); err == nil {
 		t.Fatal("expected reject for shell_exec")
 	}
+	// Wrong pubkey must fail even with a valid-looking sig from another key.
+	other, _ := kcrypto.Generate()
+	r.hubPubKey = other.Public
+	j.Verb = verbStatusDump
+	j.Sig = "ed25519=" + hex.EncodeToString(keys.Sign(payload))
+	if err := r.verifyJob(&j); err == nil {
+		t.Fatal("expected reject for wrong pubkey")
+	}
+	_ = ed25519.PublicKeySize
 }

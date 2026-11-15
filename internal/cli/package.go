@@ -89,7 +89,7 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement id/name written into sentinel.json")
 	cmd.Flags().StringVar(&agentLabel, "agent-label", "", "operator label written into sentinel.json / heartbeats")
 	cmd.Flags().StringVar(&hubRegistry, "hub-registry", "", "hub registry.db path; imports sibling forge manifest after packaging")
-	cmd.Flags().StringVar(&hubSigningKey, "hub-signing-key", "", "trusted signing key for --hub-registry (default: <registry-dir>/signing.key)")
+	cmd.Flags().StringVar(&hubSigningKey, "hub-signing-key", "", "hub Ed25519 private key (writes etc/hub.pub for job verify; also used with --hub-registry)")
 	cmd.Flags().StringVar(&visibleUnder, "visible-under", "", "Documents-relative decoy dir (e.g. Work/Finance); install watches that path")
 	cmd.Flags().BoolVar(&clientBundle, "client-bundle", false, "omit operator-only DEPLOY.md and bin/README.txt")
 	_ = cmd.MarkFlagRequired("target")

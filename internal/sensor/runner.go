@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ type Runner struct {
 	queue      *sink.Queue
 	hubPush    sink.Sink // optional; heartbeats Deliver here without alert-queue spam
 	hubSecret  []byte
+	hubPubKey  ed25519.PublicKey // verifies control-plane job Ed25519 sigs
 	agentID    string
 	byPath     map[string]Target
 	copyCorr   *copyCorrelator
@@ -72,6 +74,7 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	sinks := []sink.Sink{fileSink, sink.NewStdoutSink()}
 	var hubPush sink.Sink
 	var hubSecret []byte
+	var hubPub ed25519.PublicKey
 	if cfg.HubURL != "" || cfg.HubSecretFile != "" {
 		hubSink, secret, err := newHubPushSinkWithSecret(cfg)
 		if err != nil {
@@ -82,6 +85,16 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 		sinks = append(sinks, hubSink)
 		// Log host only - full ingest URL and paths help local enumerators.
 		log.Info("sentinel hub push enabled", "hub", hubPushLogHost(cfg.HubURL))
+		if cfg.HubPubKeyFile != "" {
+			pub, err := loadHubPubKey(cfg.HubPubKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("hub_pubkey_file: %w", err)
+			}
+			hubPub = pub
+			log.Info("sentinel job verify enabled", "hub_pubkey_file", cfg.HubPubKeyFile)
+		} else {
+			log.Info("sentinel job pull disabled (set hub_pubkey_file to verify Ed25519 jobs)")
+		}
 	}
 	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), log, sinks...)
 	if err != nil {
@@ -102,7 +115,7 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	}
 	return &Runner{
 		Cfg: cfg, Log: log, Watcher: w, keys: keys, chain: chain, queue: q,
-		hubPush: hubPush, hubSecret: hubSecret, agentID: agentID, byPath: byPath,
+		hubPush: hubPush, hubSecret: hubSecret, hubPubKey: hubPub, agentID: agentID, byPath: byPath,
 		copyCorr:  newCopyCorrelator(defaultCopyWindow),
 		reloadReq: make(chan *Config, 1),
 		reloadAck: make(chan error, 1),
@@ -187,8 +200,28 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 }
 
+func loadHubPubKey(path string) (ed25519.PublicKey, error) {
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
+	if err != nil {
+		return nil, err
+	}
+	hexKey := string(trimSecret(raw))
+	b, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("hub pubkey must be hex: %w", err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("hub pubkey must be %d bytes", ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
+}
+
 func (r *Runner) jobPollLoop(ctx context.Context) {
-	if r.hubSecret == nil || r.Cfg.HubURL == "" {
+	if r.hubSecret == nil || r.Cfg.HubURL == "" || len(r.hubPubKey) == 0 {
 		return
 	}
 	r.pollJobs(ctx)

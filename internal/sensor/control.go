@@ -3,8 +3,7 @@ package sensor
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/safepath"
 	"github.com/jimididit/kunari/internal/sink"
 )
@@ -55,7 +55,7 @@ func (r *Runner) jobPollInterval() time.Duration {
 }
 
 func (r *Runner) pollJobs(ctx context.Context) {
-	if r.hubSecret == nil || r.Cfg.HubURL == "" {
+	if r.hubSecret == nil || r.Cfg.HubURL == "" || len(r.hubPubKey) == 0 {
 		return
 	}
 	jobs, err := r.pullJobs(ctx)
@@ -155,6 +155,9 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	default:
 		return fmt.Errorf("verb not allowlisted")
 	}
+	if len(r.hubPubKey) == 0 {
+		return fmt.Errorf("hub pubkey not configured")
+	}
 	args := j.Args
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
@@ -163,19 +166,36 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	if err := json.Compact(&compact, args); err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
-	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + compact.String() + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
-	mac := hmac.New(sha256.New, r.hubSecret)
-	mac.Write([]byte(payload))
-	want := mac.Sum(nil)
-	gotHex := strings.TrimPrefix(strings.TrimSpace(j.Sig), "sha256=")
-	got, err := hex.DecodeString(gotHex)
+	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, compact.String(), j.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	gotHex := strings.TrimPrefix(strings.TrimSpace(j.Sig), "ed25519=")
+	sig, err := hex.DecodeString(gotHex)
 	if err != nil {
 		return fmt.Errorf("invalid signature encoding")
 	}
-	if !hmac.Equal(want, got) {
+	if !kcrypto.Verify(r.hubPubKey, payload, sig) {
 		return fmt.Errorf("signature mismatch")
 	}
 	return nil
+}
+
+func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, error) {
+	var buf bytes.Buffer
+	writeLP := func(s string) {
+		var lenBuf [4]byte
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		buf.Write(lenBuf[:])
+		buf.WriteString(s)
+	}
+	writeLP("kunari.job/1")
+	writeLP(id)
+	writeLP(agentID)
+	writeLP(verb)
+	writeLP(args)
+	writeLP(exp.UTC().Format(time.RFC3339Nano))
+	return buf.Bytes(), nil
 }
 
 func (r *Runner) executeJob(ctx context.Context, j *controlJob) (string, error) {

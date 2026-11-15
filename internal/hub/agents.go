@@ -247,6 +247,48 @@ func (t *agentTracker) NeedsMissingAlert(id string) bool {
 	return rec != nil && !rec.Retired && !rec.OperatorAcked && rec.Missing && !rec.MissingAlerted
 }
 
+// ClaimMissingAlert atomically claims the right to emit agent_missing under one
+// lock (sets MissingAlerted). Call AbortMissingAlert if the emit fails so the
+// next watch tick can retry. AckMissing cannot interleave between check and mark.
+func (t *agentTracker) ClaimMissingAlert(id string) bool {
+	if t == nil || id == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired || rec.OperatorAcked || !rec.Missing || rec.MissingAlerted {
+		return false
+	}
+	rec.MissingAlerted = true
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+		rec.MissingAlerted = false
+		return false
+	}
+	t.lastErr = ""
+	return true
+}
+
+// AbortMissingAlert rolls back a ClaimMissingAlert when the durable emit failed.
+func (t *agentTracker) AbortMissingAlert(id string) {
+	if t == nil || id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || !rec.Missing || rec.OperatorAcked {
+		return
+	}
+	rec.MissingAlerted = false
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
+	}
+}
+
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {

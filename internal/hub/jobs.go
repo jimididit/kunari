@@ -2,8 +2,8 @@ package hub
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/safepath"
 )
 
@@ -29,11 +30,12 @@ const (
 )
 
 const (
-	jobStatusQueued   = "queued"
-	jobStatusInflight = "inflight"
-	jobStatusDone     = "done"
-	jobStatusFailed   = "failed"
-	jobStatusExpired  = "expired"
+	jobStatusQueued     = "queued"
+	jobStatusInflight   = "inflight"
+	jobStatusHubPending = "hub_pending" // hub-side verbs; never agent-pulled
+	jobStatusDone       = "done"
+	jobStatusFailed     = "failed"
+	jobStatusExpired    = "expired"
 )
 
 const defaultJobTTL = 30 * time.Minute
@@ -62,7 +64,7 @@ type Job struct {
 	Error       string          `json:"error,omitempty"`
 	DeliveredAt *time.Time      `json:"delivered_at,omitempty"`
 	DoneAt      *time.Time      `json:"done_at,omitempty"`
-	Sig         string          `json:"sig"` // HMAC over canonical job fields
+	Sig         string          `json:"sig"` // ed25519 hex over length-prefixed job fields
 }
 
 // AuditEntry records who queued which verb.
@@ -81,22 +83,25 @@ type jobStoreFile struct {
 }
 
 type jobStore struct {
-	mu     sync.Mutex
-	path   string // single atomic jobs-state.json (jobs + audit)
-	jobs   map[string]*Job
-	audit  []AuditEntry
-	secret []byte
+	mu   sync.Mutex
+	path string // single atomic jobs-state.json (jobs + audit)
+	jobs map[string]*Job
+	audit []AuditEntry
+	keys *kcrypto.KeyPair // hub Ed25519; agents verify with provisioned pubkey
 }
 
-func newJobStore(dataDir string, ingestSecret []byte) (*jobStore, error) {
+func newJobStore(dataDir string, keys *kcrypto.KeyPair) (*jobStore, error) {
+	if keys == nil || len(keys.Private) == 0 {
+		return nil, fmt.Errorf("hub signing key required for job store")
+	}
 	dataDir, err := safepath.Clean(dataDir)
 	if err != nil {
 		return nil, err
 	}
 	s := &jobStore{
-		path:   filepath.Join(dataDir, "jobs-state.json"),
-		jobs:   map[string]*Job{},
-		secret: append([]byte(nil), ingestSecret...),
+		path: filepath.Join(dataDir, "jobs-state.json"),
+		jobs: map[string]*Job{},
+		keys: keys,
 	}
 	if err := s.load(dataDir); err != nil {
 		return nil, err
@@ -123,6 +128,13 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		return nil, err
 	}
 	now := time.Now().UTC()
+	status := jobStatusQueued
+	detail := "queued"
+	// Hub-side verbs are never agent-pulled; mark hub_pending immediately.
+	if verb == VerbAckMissing {
+		status = jobStatusHubPending
+		detail = jobStatusHubPending
+	}
 	j := &Job{
 		ID:        uuid.Must(uuid.NewV7()).String(),
 		AgentID:   agentID,
@@ -131,9 +143,9 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		CreatedAt: now,
 		CreatedBy: createdBy,
 		ExpiresAt: now.Add(defaultJobTTL),
-		Status:    jobStatusQueued,
+		Status:    status,
 	}
-	sig, err := signJob(s.secret, j)
+	sig, err := signJob(s.keys, j)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +161,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		AgentID: agentID,
 		JobID:   j.ID,
 		Verb:    verb,
-		Detail:  "queued",
+		Detail:  detail,
 	})
 	if err := s.persistLocked(); err != nil {
 		delete(s.jobs, j.ID)
@@ -186,10 +198,6 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 			}
 			continue
 		}
-		// Hub-side verbs are completed by the operator API, not agent pull.
-		if j.Verb == VerbAckMissing {
-			continue
-		}
 		switch j.Status {
 		case jobStatusQueued:
 			// claim with lease so re-poll does not re-deliver until lease expires
@@ -198,6 +206,7 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 				continue // still leased to a prior pull
 			}
 		default:
+			// hub_pending / done / failed / expired are never pulled
 			continue
 		}
 		del := now
@@ -243,7 +252,7 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 	if j == nil || j.AgentID != agentID {
 		return nil, fmt.Errorf("not found")
 	}
-	if j.Status != jobStatusQueued && j.Status != jobStatusInflight {
+	if j.Status != jobStatusQueued && j.Status != jobStatusInflight && j.Status != jobStatusHubPending {
 		cp := *j
 		return &cp, nil
 	}
@@ -337,7 +346,7 @@ func (s *jobStore) PendingCount() int {
 	now := time.Now().UTC()
 	for _, j := range s.jobs {
 		if j.ExpiresAt.IsZero() || now.Before(j.ExpiresAt) {
-			if j.Status == jobStatusQueued || j.Status == jobStatusInflight {
+			if j.Status == jobStatusQueued || j.Status == jobStatusInflight || j.Status == jobStatusHubPending {
 				n++
 			}
 		}
@@ -346,17 +355,20 @@ func (s *jobStore) PendingCount() int {
 }
 
 func (s *jobStore) trimLocked() {
+	if len(s.audit) > maxJobsPersisted {
+		s.audit = s.audit[len(s.audit)-maxJobsPersisted:]
+	}
 	if len(s.jobs) <= maxJobsPersisted {
 		return
 	}
 	type pair struct {
 		id     string
 		t      time.Time
-		active bool // queued/inflight - prefer keep
+		active bool // queued/inflight/hub_pending - prefer keep
 	}
 	var all []pair
 	for id, j := range s.jobs {
-		active := j.Status == jobStatusQueued || j.Status == jobStatusInflight
+		active := j.Status == jobStatusQueued || j.Status == jobStatusInflight || j.Status == jobStatusHubPending
 		all = append(all, pair{id: id, t: j.CreatedAt, active: active})
 	}
 	// Drop finished/expired first (oldest), then active only if still over cap.
@@ -369,9 +381,6 @@ func (s *jobStore) trimLocked() {
 	drop := len(all) - maxJobsPersisted
 	for i := 0; i < drop; i++ {
 		delete(s.jobs, all[i].id)
-	}
-	if len(s.audit) > maxJobsPersisted {
-		s.audit = s.audit[len(s.audit)-maxJobsPersisted:]
 	}
 }
 
@@ -460,37 +469,55 @@ func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(buf.Bytes()), nil
 }
 
-func signJob(secret []byte, j *Job) (string, error) {
-	if len(secret) < 16 {
-		return "", fmt.Errorf("ingest secret too short for job signing")
-	}
+// jobSignPayload builds a length-prefixed, unambiguous message for Ed25519.
+// Field order: domain, id, agent_id, verb, args, expires_at (RFC3339Nano UTC).
+func jobSignPayload(j *Job) ([]byte, error) {
 	args, err := canonicalJSONArgs(j.Args)
+	if err != nil {
+		return nil, err
+	}
+	exp := j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	var buf bytes.Buffer
+	writeLP := func(s string) {
+		var lenBuf [4]byte
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		buf.Write(lenBuf[:])
+		buf.WriteString(s)
+	}
+	writeLP("kunari.job/1")
+	writeLP(j.ID)
+	writeLP(j.AgentID)
+	writeLP(j.Verb)
+	writeLP(string(args))
+	writeLP(exp)
+	return buf.Bytes(), nil
+}
+
+func signJob(keys *kcrypto.KeyPair, j *Job) (string, error) {
+	if keys == nil {
+		return "", fmt.Errorf("hub signing key required")
+	}
+	payload, err := jobSignPayload(j)
 	if err != nil {
 		return "", err
 	}
-	// Domain-separated from ingest body HMAC (timestamp+"."+body).
-	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil)), nil
+	sig := keys.Sign(payload)
+	return "ed25519=" + hex.EncodeToString(sig), nil
 }
 
-// VerifyJobSig checks the job HMAC using the shared ingest secret.
-func VerifyJobSig(secret []byte, j *Job) error {
-	want, err := signJob(secret, j)
+// VerifyJobSig checks the job Ed25519 signature with the hub public key.
+func VerifyJobSig(pub ed25519.PublicKey, j *Job) error {
+	payload, err := jobSignPayload(j)
 	if err != nil {
 		return err
 	}
 	got := strings.TrimSpace(j.Sig)
-	wb, err := hex.DecodeString(strings.TrimPrefix(want, "sha256="))
-	if err != nil {
-		return err
-	}
-	gb, err := hex.DecodeString(strings.TrimPrefix(got, "sha256="))
+	got = strings.TrimPrefix(got, "ed25519=")
+	sig, err := hex.DecodeString(got)
 	if err != nil {
 		return fmt.Errorf("invalid signature encoding")
 	}
-	if !hmac.Equal(wb, gb) {
+	if !kcrypto.Verify(pub, payload, sig) {
 		return fmt.Errorf("signature mismatch")
 	}
 	return nil

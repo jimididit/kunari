@@ -7,12 +7,22 @@ import (
 	"time"
 
 	"github.com/jimididit/kunari/internal/event"
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 )
+
+func testJobKeys(t *testing.T) *kcrypto.KeyPair {
+	t.Helper()
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
 
 func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	dir := t.TempDir()
-	secret := []byte("0123456789abcdef0123456789abcdef")
-	s, err := newJobStore(dir, secret)
+	keys := testJobKeys(t)
+	s, err := newJobStore(dir, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +33,7 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	if j.Sig == "" || j.Status != jobStatusQueued {
 		t.Fatalf("bad job: %+v", j)
 	}
-	if err := VerifyJobSig(secret, j); err != nil {
+	if err := VerifyJobSig(keys.Public, j); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Pull("agent-a", 5)
@@ -45,8 +55,8 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 }
 
 func TestJobStoreCanonicalArgsSig(t *testing.T) {
-	secret := []byte("0123456789abcdef0123456789abcdef")
-	s, err := newJobStore(t.TempDir(), secret)
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +67,36 @@ func TestJobStoreCanonicalArgsSig(t *testing.T) {
 	if string(j.Args) != `{"targets":[]}` {
 		t.Fatalf("args not compacted: %s", j.Args)
 	}
-	if err := VerifyJobSig(secret, j); err != nil {
+	if err := VerifyJobSig(keys.Public, j); err != nil {
 		t.Fatal(err)
 	}
 }
 
+func TestJobStoreAckMissingNotPullable(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("agent-a", VerbAckMissing, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Status != jobStatusHubPending {
+		t.Fatalf("want hub_pending, got %s", j.Status)
+	}
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("ack_missing must not be pullable: %v %+v", err, got)
+	}
+	done, err := s.Complete("agent-a", j.ID, "acked by operator", "")
+	if err != nil || done.Status != jobStatusDone {
+		t.Fatalf("complete hub_pending: %v %+v", err, done)
+	}
+}
+
 func TestJobStoreRejectsUnknownVerb(t *testing.T) {
-	s, err := newJobStore(t.TempDir(), []byte("0123456789abcdef0123456789abcdef"))
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +106,7 @@ func TestJobStoreRejectsUnknownVerb(t *testing.T) {
 }
 
 func TestJobStoreExpire(t *testing.T) {
-	s, err := newJobStore(t.TempDir(), []byte("0123456789abcdef0123456789abcdef"))
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,15 +125,15 @@ func TestJobStoreExpire(t *testing.T) {
 
 func TestJobStorePersistRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	secret := []byte("0123456789abcdef0123456789abcdef")
-	s, err := newJobStore(dir, secret)
+	keys := testJobKeys(t)
+	s, err := newJobStore(dir, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Enqueue("agent-b", VerbSetTargets, "op", json.RawMessage(`{"targets":[]}`)); err != nil {
 		t.Fatal(err)
 	}
-	s2, err := newJobStore(dir, secret)
+	s2, err := newJobStore(dir, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +145,22 @@ func TestJobStorePersistRoundTrip(t *testing.T) {
 	}
 }
 
+func TestJobStoreTrimAuditIndependent(t *testing.T) {
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	for i := 0; i < maxJobsPersisted+50; i++ {
+		s.audit = append(s.audit, AuditEntry{JobID: "x", Verb: "status_dump"})
+	}
+	s.trimLocked()
+	if len(s.audit) > maxJobsPersisted {
+		t.Fatalf("audit not trimmed: %d", len(s.audit))
+	}
+	s.mu.Unlock()
+}
+
 func TestAgentTrackerAckMissing(t *testing.T) {
 	tr, err := newAgentTracker(t.TempDir(), 100*time.Millisecond)
 	if err != nil {
@@ -121,7 +170,12 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	ev.Host = &event.HostInfo{ID: "ack-agent", Hostname: "lab", OS: "linux"}
 	tr.NoteHeartbeat(ev)
 	_ = tr.CheckMissing(time.Now().UTC().Add(200 * time.Millisecond))
-	tr.MarkMissingAlerted("ack-agent")
+	if !tr.ClaimMissingAlert("ack-agent") {
+		t.Fatal("expected claim")
+	}
+	if tr.ClaimMissingAlert("ack-agent") {
+		t.Fatal("double claim must fail")
+	}
 	if err := tr.AckMissing("ack-agent"); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +186,6 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	if len(snap) != 1 || snap[0].Missing || !snap[0].Acked {
 		t.Fatalf("snapshot after ack: %+v", snap)
 	}
-	// Healthy (fresh) agent cannot be acked.
 	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
 	ev2.Host = &event.HostInfo{ID: "healthy", Hostname: "lab", OS: "linux"}
 	tr.NoteHeartbeat(ev2)

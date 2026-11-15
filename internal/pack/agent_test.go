@@ -8,8 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/sensor"
 )
+
+func testHubSigningKey(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "signing.key")
+	if _, err := kcrypto.LoadOrCreate(path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestBuildAgentLinux(t *testing.T) {
 	dir := t.TempDir()
@@ -21,6 +31,7 @@ func TestBuildAgentLinux(t *testing.T) {
 	if err := os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	key := testHubSigningKey(t, dir)
 	out := filepath.Join(dir, "pack")
 	if err := BuildAgent(AgentOptions{
 		Target:        "linux",
@@ -29,6 +40,7 @@ func TestBuildAgentLinux(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: key,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +52,7 @@ func TestBuildAgentLinux(t *testing.T) {
 		"decoys/bait.env",
 		"etc/sentinel.json",
 		"etc/ingest.secret",
+		"etc/hub.pub",
 		"bin/README.txt",
 	} {
 		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(rel))); err != nil {
@@ -118,6 +131,7 @@ func TestBuildAgentRejectsUnsafePrefix(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		InstallPrefix: "/tmp/kunari; curl evil.test",
 	})
 	if err == nil {
@@ -138,6 +152,7 @@ func TestBuildAgentRejectsLinuxHomePrefix(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		InstallPrefix: "/home/jdi/kunari-agent",
 	})
 	if err == nil {
@@ -166,6 +181,7 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com/",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +255,7 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		VisibleUnder:  "Documents/Work/Finance",
 		ClientBundle:  true,
 	}); err != nil {
@@ -324,6 +341,7 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		VisibleUnder:  "Work/Finance",
 	}); err != nil {
 		t.Fatal(err)
@@ -437,6 +455,7 @@ func TestBuildAgentWarnsOnSentinelOnlyManifest(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -484,6 +503,7 @@ func TestBuildAgentCustomNames(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		BinaryName:    "acme-tripwire",
 		UnitName:      "acme-tripwire",
 	}); err != nil {
@@ -525,6 +545,7 @@ func TestBuildAgentRejectsDeniedBinaryName(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		BinaryName:    "svchost",
 	})
 	if err == nil {
@@ -549,6 +570,7 @@ func TestBuildAgentWindowsCustomTask(t *testing.T) {
 		TokenID:       "abcdabcdabcdabcd",
 		HubURL:        "https://hub.example.com",
 		HubSecretFile: sec,
+		HubSigningKey: testHubSigningKey(t, dir),
 		BinaryName:    "AcmeWatch",
 		UnitName:      "AcmeWatchTask",
 	}); err != nil {

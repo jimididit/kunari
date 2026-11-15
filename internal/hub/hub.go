@@ -136,7 +136,7 @@ func New(cfg Config) (*Hub, error) {
 	if agents.enabled() {
 		cfg.Logger.Info("hub agent watch enabled", "stale_after", cfg.AgentStaleAfter.String())
 	}
-	jobs, err := newJobStore(cfg.DataDir, ingestSecret)
+	jobs, err := newJobStore(cfg.DataDir, keys)
 	if err != nil {
 		_ = reg.Close()
 		return nil, err

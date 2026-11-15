@@ -110,6 +110,10 @@ func BuildAgent(opts AgentOptions) error {
 	if err := copyFile(sec, filepath.Join(out, ingestRel), 0o600); err != nil {
 		return fmt.Errorf("copy hub ingest file: %w", err)
 	}
+	hubPubRel := filepath.Join("etc", "hub.pub")
+	if err := writeHubPubKey(opts, filepath.Join(out, hubPubRel)); err != nil {
+		return fmt.Errorf("hub pubkey: %w", err)
+	}
 
 	engagement := strings.TrimSpace(opts.Engagement)
 	agentLabel := strings.TrimSpace(opts.AgentLabel)
@@ -147,6 +151,7 @@ func BuildAgent(opts AgentOptions) error {
 		AgentLabel:     agentLabel,
 		HubURL:         strings.TrimRight(opts.HubURL, "/"),
 		HubSecretFile:  targetJoin(goos, prefix, "etc", "ingest.secret"),
+		HubPubKeyFile:  targetJoin(goos, prefix, "etc", "hub.pub"),
 	}
 	if visibleUnder != "" && goos == "windows" {
 		cfg.PreferTier = []string{"win-sacl-4663"}
@@ -229,6 +234,21 @@ func BuildAgent(opts AgentOptions) error {
 		}
 	}
 	return nil
+}
+
+func writeHubPubKey(opts AgentOptions, dest string) error {
+	keyPath := strings.TrimSpace(opts.HubSigningKey)
+	if keyPath == "" && strings.TrimSpace(opts.HubRegistry) != "" {
+		keyPath = filepath.Join(filepath.Dir(opts.HubRegistry), "signing.key")
+	}
+	if keyPath == "" {
+		return fmt.Errorf("--hub-signing-key required so the pack includes etc/hub.pub for control-plane job verify")
+	}
+	keys, err := kcrypto.Load(keyPath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dest, []byte(keys.PublicHex()+"\n"), 0o600)
 }
 
 func loadSiblingManifest(artifactPath string) *registry.Manifest {

@@ -224,8 +224,8 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
 	for _, rec := range h.agents.CheckMissing(now) {
-		// Re-check under agentMu: a heartbeat may have cleared Missing since the snapshot.
-		if !h.agents.NeedsMissingAlert(rec.ID) {
+		// Claim under tracker lock so AckMissing cannot win the race between check and mark.
+		if !h.agents.ClaimMissingAlert(rec.ID) {
 			continue
 		}
 		tier := rec.Tier
@@ -244,11 +244,10 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 		ev.Confidence.Action = "inferred"
 		if err := h.chain.Append(ev); err != nil {
 			h.log.Error("agent_missing chain", "agent_id", rec.ID, "err", err)
+			h.agents.AbortMissingAlert(rec.ID)
 			continue
 		}
 		h.subs.Broadcast(ev)
-		// Mark after chain append so enqueue failure cannot re-append duplicates.
-		h.agents.MarkMissingAlerted(rec.ID)
 		if err := h.queue.Enqueue(ev); err != nil {
 			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)
 		}

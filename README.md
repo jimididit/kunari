@@ -125,7 +125,7 @@ Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Ne
 | `GET /api/v1/tokens` | Bearer / `X-Kunari-API-Key` | Registry inventory (no signatures) |
 | `POST /api/v1/tokens/{id}/revoke` | Bearer / `X-Kunari-API-Key` | Revoke a forged token |
 
-Control-plane jobs are pull-only allowlisted verbs (reload watches, status dump, ack missing, rotate hub URL hint). Not a shell, not arbitrary exec. Job pull/result use the shared ingest HMAC (not per-agent identity keys) and require agent watch plus a recent heartbeat for that `agent_id`. Compromised agents that share the secret can still impersonate each other until per-agent secrets land. Job pull/result use the shared ingest HMAC and require a recent heartbeat for that `agent_id` (compromised agents on the same secret can still impersonate each other until per-agent secrets land).
+Control-plane jobs are pull-only allowlisted verbs (reload watches, status dump, ack missing, rotate hub URL hint). Not a shell, not arbitrary exec. Job envelopes are **Ed25519-signed by the hub** (agents verify with provisioned `hub_pubkey_file` / pack `etc/hub.pub`). Job pull/result still use the shared ingest HMAC for transport auth and require agent watch plus a recent heartbeat for that `agent_id`. Job pull/result use the shared ingest HMAC and require a recent heartbeat for that `agent_id` (compromised agents on the same secret can still impersonate each other until per-agent secrets land).
 
 Behind a TLS terminator (required for realistic off-host HTTPS beacons):
 
