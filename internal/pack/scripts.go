@@ -11,6 +11,7 @@ func linuxInstall(prefix, binName, unitName, visibleUnder, decoyBase string) str
 	uq := shQuote(unitName)
 	vq := shQuote(visibleUnder)
 	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper install (Linux).
 set -euo pipefail
@@ -22,6 +23,7 @@ VISIBLE_UNDER=%s
 DECOY_BASE=%s
 UNIT_FILE="$UNIT_NAME.service"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
+%s
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
@@ -58,10 +60,15 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     exit 1
   fi
   HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-  VISIBLE_DIR="$HOME_DIR/Documents/$VISIBLE_UNDER"
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$VISIBLE_DIR"
+  if [[ -z "$HOME_DIR" || ! -d "$HOME_DIR" ]]; then
+    echo "error: home directory missing for $TARGET_USER" >&2
+    exit 1
+  fi
+  refuse_if_symlink "$HOME_DIR"
+  DOCS_ROOT="$HOME_DIR/Documents"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER" "$TARGET_USER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
-  install -m 0600 -o "$TARGET_USER" -g "$TARGET_USER" "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" "$TARGET_USER"
   # Grant service user read on the decoy and traverse on parents (Documents homes are often 0700).
   if command -v setfacl >/dev/null 2>&1; then
     cur="$WATCH_PATH"
@@ -78,18 +85,8 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     echo "error: setfacl required for --visible-under on Linux so user kunari can read $WATCH_PATH" >&2
     exit 1
   fi
-  python3 - "$PREFIX/etc/sentinel.json" "$WATCH_PATH" <<'PY'
-import json, sys
-path, watch = sys.argv[1], sys.argv[2]
-with open(path, encoding="utf-8") as f:
-    cfg = json.load(f)
-if not cfg.get("targets"):
-    raise SystemExit("sentinel.json has no targets")
-cfg["targets"][0]["path"] = watch
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
-PY
+  PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
+  patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
   chmod 0600 "$PREFIX/etc/sentinel.json"
 fi
@@ -106,7 +103,7 @@ echo "installed under $PREFIX; service $UNIT_NAME started"
 if [[ -n "$VISIBLE_UNDER" ]]; then
   echo "watching visible decoy: $WATCH_PATH"
 fi
-`, pq, bq, uq, vq, dq)
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func linuxUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
@@ -115,6 +112,7 @@ func linuxUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) s
 	uq := shQuote(unitName)
 	vq := shQuote(visibleUnder)
 	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper uninstall (Linux).
 set -euo pipefail
@@ -124,6 +122,7 @@ UNIT_NAME=%s
 VISIBLE_UNDER=%s
 DECOY_BASE=%s
 UNIT_FILE="$UNIT_NAME.service"
+%s
 systemctl disable --now "$UNIT_FILE" 2>/dev/null || true
 rm -f "/etc/systemd/system/$UNIT_FILE"
 systemctl daemon-reload 2>/dev/null || true
@@ -134,12 +133,14 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   fi
   if [[ -n "$TARGET_USER" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-    rm -f "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+    if [[ -n "$HOME_DIR" ]]; then
+      safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+    fi
   fi
 fi
 rm -rf "$PREFIX"
 echo "uninstalled $UNIT_NAME and removed $PREFIX"
-`, pq, bq, uq, vq, dq)
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func linuxUnit(prefix, binName string) string {
@@ -171,6 +172,7 @@ func darwinInstall(prefix, binName, unitName, visibleUnder, decoyBase string) st
 	uq := shQuote(unitName)
 	vq := shQuote(visibleUnder)
 	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper install (macOS).
 set -euo pipefail
@@ -182,6 +184,7 @@ VISIBLE_UNDER=%s
 DECOY_BASE=%s
 PLIST_SRC="$ROOT/$UNIT_NAME.plist"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
+%s
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
@@ -214,22 +217,17 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   if [[ -z "$HOME_DIR" ]]; then
     HOME_DIR="/Users/$TARGET_USER"
   fi
-  VISIBLE_DIR="$HOME_DIR/Documents/$VISIBLE_UNDER"
-  install -d -m 0755 -o "$TARGET_USER" -g staff "$VISIBLE_DIR"
+  if [[ ! -d "$HOME_DIR" ]]; then
+    echo "error: home directory missing for $TARGET_USER" >&2
+    exit 1
+  fi
+  refuse_if_symlink "$HOME_DIR"
+  DOCS_ROOT="$HOME_DIR/Documents"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER" staff)"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
-  install -m 0600 -o "$TARGET_USER" -g staff "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH"
-  python3 - "$PREFIX/etc/sentinel.json" "$WATCH_PATH" <<'PY'
-import json, sys
-path, watch = sys.argv[1], sys.argv[2]
-with open(path, encoding="utf-8") as f:
-    cfg = json.load(f)
-if not cfg.get("targets"):
-    raise SystemExit("sentinel.json has no targets")
-cfg["targets"][0]["path"] = watch
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
-PY
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" staff
+  PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
+  patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chmod 0600 "$PREFIX/etc/sentinel.json"
 fi
 
@@ -252,7 +250,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   echo "watching visible decoy: $WATCH_PATH"
 fi
 echo "Note: Full Disk Access may be required for stronger macOS tiers."
-`, pq, bq, uq, vq, dq)
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func darwinUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
@@ -261,6 +259,7 @@ func darwinUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) 
 	uq := shQuote(unitName)
 	vq := shQuote(visibleUnder)
 	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper uninstall (macOS).
 set -euo pipefail
@@ -270,6 +269,7 @@ UNIT_NAME=%s
 VISIBLE_UNDER=%s
 DECOY_BASE=%s
 PLIST_DST="/Library/LaunchDaemons/$UNIT_NAME.plist"
+%s
 launchctl bootout "system/$UNIT_NAME" 2>/dev/null || true
 rm -f "$PLIST_DST"
 if [[ -n "$VISIBLE_UNDER" ]]; then
@@ -282,12 +282,12 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     if [[ -z "$HOME_DIR" ]]; then
       HOME_DIR="/Users/$TARGET_USER"
     fi
-    rm -f "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+    safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
   fi
 fi
 rm -rf "$PREFIX"
 echo "uninstalled $UNIT_NAME and removed $PREFIX"
-`, pq, bq, uq, vq, dq)
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func darwinPlist(prefix, binName, unitName string) string {
@@ -325,6 +325,7 @@ func windowsInstall(prefix, binName, unitName, visibleUnder, decoyBase string) s
 	u := strings.ReplaceAll(unitName, `'`, `''`)
 	v := strings.ReplaceAll(visibleUnder, `'`, `''`)
 	d := strings.ReplaceAll(decoyBase, `'`, `''`)
+	helpers := windowsVisiblePSHelpers()
 	return fmt.Sprintf(`# Endpoint helper install (Windows). Run elevated.
 # Not a Windows Service binary; install uses a SYSTEM scheduled task.
 # Prefer ScheduledTasks cmdlets over schtasks.exe under $ErrorActionPreference=Stop.
@@ -336,6 +337,7 @@ $TaskName = '%s'
 $VisibleUnder = '%s'
 $DecoyBase = '%s'
 $ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
+%s
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
   throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
@@ -385,10 +387,11 @@ if ($VisibleUnder -ne '') {
   if (-not (Test-Path -LiteralPath $userProfile)) {
     throw ("interactive user profile not found: {0}" -f $userProfile)
   }
-  $VisibleDir = Join-Path (Join-Path $userProfile 'Documents') $VisibleUnder
-  New-Item -ItemType Directory -Force -Path $VisibleDir | Out-Null
+  Assert-NoReparse $userProfile
+  $docsRoot = Join-Path $userProfile 'Documents'
+  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder
   $WatchPath = Join-Path $VisibleDir $DecoyBase
-  Copy-Item -LiteralPath (Join-Path $Root ('decoys\' + $DecoyBase)) -Destination $WatchPath -Force
+  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath
   # Intended user may open/read the decoy; keep write limited to SYSTEM/Administrators.
   $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $WatchPath)
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $WatchPath, $console)
@@ -428,7 +431,7 @@ Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, A
 if ($VisibleUnder -ne '') {
   Write-Host ("watching visible decoy: {0}" -f $WatchPath)
 }
-`, p, b, u, v, d)
+`, p, b, u, v, d, helpers)
 }
 
 func windowsUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
@@ -437,6 +440,7 @@ func windowsUninstall(prefix, binName, unitName, visibleUnder, decoyBase string)
 	u := strings.ReplaceAll(unitName, `'`, `''`)
 	v := strings.ReplaceAll(visibleUnder, `'`, `''`)
 	d := strings.ReplaceAll(decoyBase, `'`, `''`)
+	helpers := windowsVisiblePSHelpers()
 	return fmt.Sprintf(`# Endpoint helper uninstall (Windows). Run elevated.
 $ErrorActionPreference = 'Stop'
 $Prefix = '%s'
@@ -445,6 +449,7 @@ $TaskName = '%s'
 $VisibleUnder = '%s'
 $DecoyBase = '%s'
 $ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
+%s
 foreach ($tn in @($TaskName, 'KunariSentinel') | Select-Object -Unique) {
   if (Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
@@ -462,14 +467,12 @@ if ($VisibleUnder -ne '') {
   if (-not [string]::IsNullOrWhiteSpace($console) -and $console -match '\\') {
     $userSam = $console.Split('\')[-1]
     $watch = Join-Path (Join-Path (Join-Path 'C:\Users' $userSam) ('Documents\' + $VisibleUnder)) $DecoyBase
-    if (Test-Path -LiteralPath $watch) {
-      Remove-Item -LiteralPath $watch -Force -ErrorAction SilentlyContinue
-    }
+    Remove-VisibleDecoy $watch
   }
 }
 if (Test-Path -LiteralPath $Prefix) {
   Remove-Item -LiteralPath $Prefix -Recurse -Force
 }
 Write-Host ("uninstalled {0} and removed {1}" -f $TaskName, $Prefix)
-`, p, b, u, v, d)
+`, p, b, u, v, d, helpers)
 }

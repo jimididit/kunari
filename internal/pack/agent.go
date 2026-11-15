@@ -165,7 +165,7 @@ func BuildAgent(opts AgentOptions) error {
 		if err := os.WriteFile(binNote, []byte(binReadme(binName)), 0o600); err != nil {
 			return err
 		}
-		deploy := deployMarkdown(goos, prefix, binName, unitName, base, detect)
+		deploy := deployMarkdown(goos, prefix, binName, unitName, base, detect, visibleUnder)
 		if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
 			return err
 		}

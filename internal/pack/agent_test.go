@@ -276,10 +276,67 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"auditpol /set /subcategory:\"File System\"",
 		"ConvertFrom-Json",
 		"Documents",
+		"Assert-NoReparse",
+		"Install-VisibleDecoy",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "python3 -") || strings.Contains(body, "python3<<") {
+		t.Fatal("windows install must not invoke python")
+	}
+}
+
+func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "payroll-2024.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "pack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		VisibleUnder:  "Work/Finance",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sh, err := os.ReadFile(filepath.Join(out, "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(sh)
+	if strings.Contains(body, "python3 -") || strings.Contains(body, "<<'PY'") || strings.Contains(body, "python3<<") {
+		t.Fatal("linux install must not invoke python")
+	}
+	for _, needle := range []string{
+		"refuse_if_symlink",
+		"install_visible_decoy",
+		"patch_sentinel_watch",
+		"safe_rm_visible_file",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("install.sh missing %q", needle)
+		}
+	}
+	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deploy), "Documents/Work/Finance/payroll-2024.env") {
+		t.Fatal("DEPLOY.md should describe the visible Documents watch path")
+	}
+	un, err := os.ReadFile(filepath.Join(out, "uninstall.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(un), "safe_rm_visible_file") {
+		t.Fatal("uninstall.sh should use safe_rm_visible_file")
 	}
 }
 
