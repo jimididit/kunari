@@ -32,7 +32,7 @@ type controlJob struct {
 	ID        string          `json:"id"`
 	AgentID   string          `json:"agent_id"`
 	Verb      string          `json:"verb"`
-	Args      json.RawMessage `json:"args,omitempty"`
+	Args      json.RawMessage `json:"args"`
 	ExpiresAt time.Time       `json:"expires_at"`
 	Sig       string          `json:"sig"`
 }

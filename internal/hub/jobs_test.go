@@ -160,32 +160,49 @@ func TestJobSigSurvivesHTMLCharsAndJSONTransport(t *testing.T) {
 	}
 }
 
-func TestJobStoreAckMissingNotPullable(t *testing.T) {
+func TestJobStoreAckMissingEnqueueCompleted(t *testing.T) {
 	keys := testJobKeys(t)
 	s, err := newJobStore(t.TempDir(), keys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	j, err := s.Enqueue("agent-a", VerbAckMissing, "op", nil)
+	j, err := s.EnqueueCompleted("agent-a", VerbAckMissing, "op", nil, "acked by operator", "", "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.Status != jobStatusHubPending {
-		t.Fatalf("want hub_pending, got %s", j.Status)
+	if j.Status != jobStatusDone || string(j.Args) != `{}` {
+		t.Fatalf("want done with args {}: %+v", j)
 	}
 	got, err := s.Pull("agent-a", 5)
 	if err != nil || len(got) != 0 {
-		t.Fatalf("ack_missing must not be pullable: %v %+v", err, got)
+		t.Fatalf("completed ack_missing must not be pullable: %v %+v", err, got)
 	}
-	if got, err := s.Complete("agent-a", j.ID, "spoof", ""); err != nil || got.Status != jobStatusHubPending {
-		t.Fatalf("agent Complete must not finalize hub_pending: %v %+v", err, got)
-	}
-	done, err := s.CompleteHub("agent-a", j.ID, "acked by operator", "", "operator")
-	if err != nil || done.Status != jobStatusDone {
-		t.Fatalf("complete hub_pending: %v %+v", err, done)
+	if got, err := s.Complete("agent-a", j.ID, "spoof", ""); err != nil || got.Status != jobStatusDone {
+		t.Fatalf("agent Complete must not change done job: %v %+v", err, got)
 	}
 	if len(s.Audit(5)) == 0 || !strings.Contains(s.Audit(5)[0].Actor, "operator") {
 		t.Fatalf("hub complete audit actor: %+v", s.Audit(5))
+	}
+}
+
+func TestJobArgsNeverNullOnWire(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(j); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`"args":null`)) || !bytes.Contains(buf.Bytes(), []byte(`"args":{}`)) {
+		t.Fatalf("args must serialize as {}: %s", buf.Bytes())
 	}
 }
 

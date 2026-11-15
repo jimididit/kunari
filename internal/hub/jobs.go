@@ -56,7 +56,7 @@ type Job struct {
 	ID        string          `json:"id"`
 	AgentID   string          `json:"agent_id"`
 	Verb      string          `json:"verb"`
-	Args      json.RawMessage `json:"args,omitempty"`
+	Args      json.RawMessage `json:"args"` // always {}; never null (signed as {})
 	CreatedAt time.Time       `json:"created_at"`
 	CreatedBy string          `json:"created_by,omitempty"`
 	ExpiresAt time.Time       `json:"expires_at"`
@@ -124,18 +124,14 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	if !AllowedJobVerb(verb) {
 		return nil, fmt.Errorf("verb %q not allowlisted", verb)
 	}
+	if verb == VerbAckMissing {
+		return nil, fmt.Errorf("ack_missing is hub-side; use EnqueueCompleted")
+	}
 	args, err := canonicalJSONArgs(args)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	status := jobStatusQueued
-	detail := "queued"
-	// Hub-side verbs are never agent-pulled; mark hub_pending immediately.
-	if verb == VerbAckMissing {
-		status = jobStatusHubPending
-		detail = jobStatusHubPending
-	}
 	j := &Job{
 		ID:        uuid.Must(uuid.NewV7()).String(),
 		AgentID:   agentID,
@@ -144,7 +140,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		CreatedAt: now,
 		CreatedBy: createdBy,
 		ExpiresAt: now.Add(defaultJobTTL),
-		Status:    status,
+		Status:    jobStatusQueued,
 	}
 	sig, err := signJob(s.keys, j)
 	if err != nil {
@@ -162,7 +158,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		AgentID: agentID,
 		JobID:   j.ID,
 		Verb:    verb,
-		Detail:  detail,
+		Detail:  "queued",
 	})
 	if err := s.persistLocked(); err != nil {
 		delete(s.jobs, j.ID)
@@ -171,6 +167,70 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	}
 	s.trimLocked()
 	_ = s.persistLocked() // best-effort trim persist; enqueue already durable
+	cp := *j
+	return &cp, nil
+}
+
+// EnqueueCompleted records a hub-side verb as already finished in one persist
+// (never queued/hub_pending, so agents cannot pull or race it).
+func (s *jobStore) EnqueueCompleted(agentID, verb, createdBy string, args json.RawMessage, result, errMsg, actor string) (*Job, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("agent_id required")
+	}
+	if !AllowedJobVerb(verb) {
+		return nil, fmt.Errorf("verb %q not allowlisted", verb)
+	}
+	args, err := canonicalJSONArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	j := &Job{
+		ID:        uuid.Must(uuid.NewV7()).String(),
+		AgentID:   agentID,
+		Verb:      verb,
+		Args:      args,
+		CreatedAt: now,
+		CreatedBy: createdBy,
+		ExpiresAt: now.Add(defaultJobTTL),
+		DoneAt:    &now,
+	}
+	if errMsg != "" {
+		j.Status = jobStatusFailed
+		j.Error = truncateRunes(errMsg, 500)
+	} else {
+		j.Status = jobStatusDone
+		j.Result = truncateRunes(result, 4000)
+	}
+	sig, err := signJob(s.keys, j)
+	if err != nil {
+		return nil, err
+	}
+	j.Sig = sig
+	auditActor := strings.TrimSpace(actor)
+	if auditActor == "" {
+		auditActor = "hub"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jobs[j.ID] = j
+	auditLen := len(s.audit)
+	s.audit = append(s.audit, AuditEntry{
+		At:      now,
+		Actor:   auditActor,
+		AgentID: agentID,
+		JobID:   j.ID,
+		Verb:    verb,
+		Detail:  j.Status,
+	})
+	if err := s.persistLocked(); err != nil {
+		delete(s.jobs, j.ID)
+		s.audit = s.audit[:auditLen]
+		return nil, err
+	}
+	s.trimLocked()
+	_ = s.persistLocked()
 	cp := *j
 	return &cp, nil
 }

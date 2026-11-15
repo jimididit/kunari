@@ -153,34 +153,37 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := "operator"
-	if strings.TrimSpace(req.Verb) == VerbAckMissing && h.agents == nil {
-		http.Error(w, "agent watch disabled", http.StatusBadRequest)
-		return
-	}
-	j, err := h.jobs.Enqueue(agentID, req.Verb, actor, req.Args)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// ack_missing is hub-side (not agent-pulled): Ack then Complete.
-	if j.Verb == VerbAckMissing {
+	verb := strings.TrimSpace(req.Verb)
+	if verb == VerbAckMissing {
+		if h.agents == nil {
+			http.Error(w, "agent watch disabled", http.StatusBadRequest)
+			return
+		}
+		// Ack first, then persist a completed job in one shot (never hub_pending/queued).
 		h.agentMu.Lock()
 		ackErr := h.agents.AckMissing(agentID)
 		h.agentMu.Unlock()
 		if ackErr != nil {
-			done, _ := h.jobs.CompleteHub(agentID, j.ID, "", ackErr.Error(), actor)
-			if done != nil {
-				j = done
+			j, _ := h.jobs.EnqueueCompleted(agentID, verb, actor, req.Args, "", ackErr.Error(), actor)
+			if j != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": ackErr.Error(), "job": j})
+				return
 			}
 			http.Error(w, ackErr.Error(), http.StatusBadRequest)
 			return
 		}
-		done, cerr := h.jobs.CompleteHub(agentID, j.ID, "acked by operator", "", actor)
-		if cerr != nil {
-			http.Error(w, cerr.Error(), http.StatusInternalServerError)
+		j, err := h.jobs.EnqueueCompleted(agentID, verb, actor, req.Args, "acked by operator", "", actor)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		j = done
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "job": j})
+		return
+	}
+	j, err := h.jobs.Enqueue(agentID, verb, actor, req.Args)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "job": j})
 }
