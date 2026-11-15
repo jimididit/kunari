@@ -389,7 +389,7 @@ func (s *jobStore) load(dataDir string) error {
 	// Migrate legacy split files from earlier Phase E builds (paths under safepath-cleaned dataDir).
 	legacyJobs := filepath.Join(dataDir, "jobs.json")
 	legacyAudit := filepath.Join(dataDir, "jobs-audit.json")
-	b, err := os.ReadFile(legacyJobs) // #nosec G304 -- path under safepath-cleaned data_dir
+	b, err = os.ReadFile(legacyJobs) // #nosec G304 -- path under safepath-cleaned data_dir
 	if err == nil {
 		var items []Job
 		if err := json.Unmarshal(b, &items); err != nil {
