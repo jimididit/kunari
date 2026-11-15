@@ -38,11 +38,27 @@ func TestAgentTrackerMissingAndRecovery(t *testing.T) {
 	ev2.Host = &event.HostInfo{ID: "agent-1", Hostname: "lab", OS: "linux"}
 	ev2.ObservedAt = time.Now().UTC().Add(400 * time.Millisecond)
 	if !tr.NoteHeartbeat(ev2) {
-		t.Fatal("expected recovered=true on heartbeat after missing")
+		t.Fatal("expected recovered=true on heartbeat after missing alert")
 	}
 	snap := tr.Snapshot()
 	if len(snap) != 1 || snap[0].Missing {
 		t.Fatalf("expected recovered agent, got %#v", snap)
+	}
+}
+
+func TestAgentTrackerRecoverRequiresMissingAlert(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-r", Hostname: "r", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	_ = tr.CheckMissing(time.Now().UTC().Add(100 * time.Millisecond))
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-r", Hostname: "r", OS: "linux"}
+	if tr.NoteHeartbeat(ev2) {
+		t.Fatal("recovered must be false when agent_missing was never emitted")
 	}
 }
 

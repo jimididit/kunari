@@ -113,7 +113,8 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	wasMissing := rec.Missing && !rec.Retired
+	// Only pair agent_recovered with a prior durable agent_missing alert.
+	wasMissing := rec.Missing && rec.MissingAlerted && !rec.Retired
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
@@ -175,6 +176,8 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	if changed {
 		if err := t.persistLocked(); err != nil {
 			t.lastErr = err.Error()
+		} else {
+			t.lastErr = ""
 		}
 	}
 	return out
@@ -205,6 +208,8 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	rec.MissingAlerted = true
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
 	}
 }
 

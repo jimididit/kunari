@@ -50,6 +50,44 @@ func TestScanEventsPagingDoesNotSkipMatches(t *testing.T) {
 	}
 }
 
+func TestScanEventsLatestStartsNearTip(t *testing.T) {
+	dir := t.TempDir()
+	h, err := New(Config{
+		HTTPListen:      "127.0.0.1:0",
+		DataDir:         dir,
+		RegistryDB:      filepath.Join(dir, "reg.db"),
+		KeyPath:         filepath.Join(dir, "key"),
+		AgentStaleAfter: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	// Seed enough events that a head-only 10k window would miss a late host match
+	// if after stayed at 0 on a huge chain. Here we assert the tip-relative start
+	// by placing the only host match after a gap of heartbeats and using latest.
+	for i := 0; i < 3; i++ {
+		hb := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+		hb.Host = &event.HostInfo{ID: "other", Hostname: "o", OS: "linux"}
+		if err := h.chain.Append(hb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ev := event.New("tok", "sentinel", "inotify", "open")
+	ev.Host = &event.HostInfo{ID: "host-tip", Hostname: "t", OS: "linux"}
+	if err := h.chain.Append(ev); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := h.scanEvents(0, 1, "host-tip", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Host == nil || got[0].Host.ID != "host-tip" {
+		t.Fatalf("latest should find tip host match, got %#v", got)
+	}
+}
+
 func TestScanEventsLatestKeepsNewest(t *testing.T) {
 	dir := t.TempDir()
 	h, err := New(Config{
