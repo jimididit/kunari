@@ -248,6 +248,11 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	type claim struct {
+		prevStatus    string
+		prevDelivered *time.Time
+	}
+	claims := map[string]claim{}
 	var out []Job
 	changed := false
 	for _, j := range s.jobs {
@@ -272,6 +277,8 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 			// hub_pending / done / failed / expired are never pulled
 			continue
 		}
+		prevDel := j.DeliveredAt
+		claims[j.ID] = claim{prevStatus: j.Status, prevDelivered: prevDel}
 		del := now
 		j.Status = jobStatusInflight
 		j.DeliveredAt = &del
@@ -281,24 +288,26 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 	sort.Slice(out, func(i, k int) bool {
 		return out[i].CreatedAt.Before(out[k].CreatedAt)
 	})
+	restoreClaim := func(id string) {
+		stored := s.jobs[id]
+		c, ok := claims[id]
+		if stored == nil || !ok {
+			return
+		}
+		stored.Status = c.prevStatus
+		stored.DeliveredAt = c.prevDelivered
+	}
 	if len(out) > limit {
-		// un-claim overflow so they stay queued for the next pull
+		// Restore overflow to prior state (queued stays queued; prior inflight keeps lease).
 		for _, j := range out[limit:] {
-			if stored := s.jobs[j.ID]; stored != nil && stored.Status == jobStatusInflight {
-				stored.Status = jobStatusQueued
-				stored.DeliveredAt = nil
-			}
+			restoreClaim(j.ID)
 		}
 		out = out[:limit]
 	}
 	if changed {
 		if err := s.persistLocked(); err != nil {
-			// Unclaim so a disk failure does not leave phantom inflight leases in memory only.
 			for i := range out {
-				if stored := s.jobs[out[i].ID]; stored != nil && stored.Status == jobStatusInflight {
-					stored.Status = jobStatusQueued
-					stored.DeliveredAt = nil
-				}
+				restoreClaim(out[i].ID)
 			}
 			return nil, err
 		}

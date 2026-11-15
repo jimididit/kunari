@@ -282,7 +282,8 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
-// Sets MissingAlerted even if AckMissing already cleared Missing, so recovery can pair.
+// If AckMissing already cleared Missing but promoted the claim, keep MissingAlerted
+// for recovery pairing. If a heartbeat already cleared the row, do not revive it.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -294,6 +295,10 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 		return
 	}
 	rec.alertClaimed = false
+	if !rec.Missing && !rec.OperatorAcked {
+		// Heartbeat won: do not leave a stale MissingAlerted that suppresses future alerts.
+		return
+	}
 	rec.MissingAlerted = true
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
