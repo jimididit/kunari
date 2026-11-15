@@ -75,10 +75,14 @@ type AuditEntry struct {
 	Detail  string    `json:"detail,omitempty"`
 }
 
+type jobStoreFile struct {
+	Jobs  []Job        `json:"jobs"`
+	Audit []AuditEntry `json:"audit"`
+}
+
 type jobStore struct {
 	mu     sync.Mutex
-	path   string
-	auditP string
+	path   string // single atomic jobs-state.json (jobs + audit)
 	jobs   map[string]*Job
 	audit  []AuditEntry
 	secret []byte
@@ -90,12 +94,11 @@ func newJobStore(dataDir string, ingestSecret []byte) (*jobStore, error) {
 		return nil, err
 	}
 	s := &jobStore{
-		path:   filepath.Join(dataDir, "jobs.json"),
-		auditP: filepath.Join(dataDir, "jobs-audit.json"),
+		path:   filepath.Join(dataDir, "jobs-state.json"),
 		jobs:   map[string]*Job{},
 		secret: append([]byte(nil), ingestSecret...),
 	}
-	if err := s.load(); err != nil {
+	if err := s.load(dataDir); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -374,8 +377,25 @@ func (s *jobStore) trimLocked() {
 	}
 }
 
-func (s *jobStore) load() error {
+func (s *jobStore) load(dataDir string) error {
 	if b, err := os.ReadFile(s.path); err == nil { // #nosec G304 -- under data_dir
+		var doc jobStoreFile
+		if err := json.Unmarshal(b, &doc); err != nil {
+			return err
+		}
+		for i := range doc.Jobs {
+			cp := doc.Jobs[i]
+			s.jobs[cp.ID] = &cp
+		}
+		s.audit = doc.Audit
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	// Migrate legacy split files from earlier Phase E builds.
+	legacyJobs := filepath.Join(dataDir, "jobs.json")
+	legacyAudit := filepath.Join(dataDir, "jobs-audit.json")
+	if b, err := os.ReadFile(legacyJobs); err == nil { // #nosec G304 -- under data_dir
 		var items []Job
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err
@@ -387,7 +407,7 @@ func (s *jobStore) load() error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if b, err := os.ReadFile(s.auditP); err == nil { // #nosec G304 -- under data_dir
+	if b, err := os.ReadFile(legacyAudit); err == nil { // #nosec G304 -- under data_dir
 		var items []AuditEntry
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err
@@ -395,6 +415,11 @@ func (s *jobStore) load() error {
 		s.audit = items
 	} else if !os.IsNotExist(err) {
 		return err
+	}
+	if len(s.jobs) > 0 || len(s.audit) > 0 {
+		if err := s.persistLocked(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -404,18 +429,12 @@ func (s *jobStore) persistLocked() error {
 	for _, j := range s.jobs {
 		items = append(items, *j)
 	}
-	b, err := json.MarshalIndent(items, "", "  ")
+	doc := jobStoreFile{Jobs: items, Audit: s.audit}
+	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(s.path, b); err != nil {
-		return err
-	}
-	ab, err := json.MarshalIndent(s.audit, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(s.auditP, ab)
+	return writeFileAtomic(s.path, b)
 }
 
 func writeFileAtomic(path string, b []byte) error {
