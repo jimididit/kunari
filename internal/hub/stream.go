@@ -26,6 +26,9 @@ func (h *Hub) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		}
 		after = n
 	}
+	// Default: skip heartbeats in backfill so the live table is not flooded.
+	includeHeartbeats := r.URL.Query().Get("include_heartbeats") == "1" ||
+		r.URL.Query().Get("include_heartbeats") == "true"
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -50,11 +53,14 @@ func (h *Hub) handleEventStream(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		for i := range events {
+			after = events[i].Integrity.Seq
+			if !includeHeartbeats && events[i].TokenID == "heartbeat" {
+				continue
+			}
 			if err := writeSSEEvent(w, &events[i]); err != nil {
 				return
 			}
 			flusher.Flush()
-			after = events[i].Integrity.Seq
 		}
 		if len(events) < 1000 {
 			break
@@ -81,11 +87,14 @@ func (h *Hub) handleEventStream(w http.ResponseWriter, r *http.Request) {
 			if ev.Integrity.Seq <= after {
 				continue
 			}
+			after = ev.Integrity.Seq
+			if !includeHeartbeats && ev.TokenID == "heartbeat" {
+				continue
+			}
 			if err := writeSSEEvent(w, ev); err != nil {
 				return
 			}
 			flusher.Flush()
-			after = ev.Integrity.Seq
 		}
 	}
 }

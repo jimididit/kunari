@@ -37,10 +37,90 @@ func TestAgentTrackerMissingAndRecovery(t *testing.T) {
 	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
 	ev2.Host = &event.HostInfo{ID: "agent-1", Hostname: "lab", OS: "linux"}
 	ev2.ObservedAt = time.Now().UTC().Add(400 * time.Millisecond)
-	tr.NoteHeartbeat(ev2)
+	if !tr.NoteHeartbeat(ev2) {
+		t.Fatal("expected recovered=true on heartbeat after missing alert")
+	}
 	snap := tr.Snapshot()
 	if len(snap) != 1 || snap[0].Missing {
 		t.Fatalf("expected recovered agent, got %#v", snap)
+	}
+}
+
+func TestAgentTrackerRecoverRequiresMissingAlert(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-r", Hostname: "r", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	_ = tr.CheckMissing(time.Now().UTC().Add(100 * time.Millisecond))
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-r", Hostname: "r", OS: "linux"}
+	if tr.NoteHeartbeat(ev2) {
+		t.Fatal("recovered must be false when agent_missing was never emitted")
+	}
+}
+
+func TestAgentTrackerRecoverPendingRetry(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-p", Hostname: "p", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	tr.MarkRecoverPending("agent-p")
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-p", Hostname: "p", OS: "linux"}
+	if !tr.NoteHeartbeat(ev2) {
+		t.Fatal("expected recovered=true when RecoverPending is set")
+	}
+}
+
+func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-n", Hostname: "n", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	if tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("fresh agent should not need missing alert")
+	}
+	_ = tr.CheckMissing(time.Now().UTC().Add(2 * time.Minute))
+	if !tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("stale unalerted agent should need missing alert")
+	}
+	tr.MarkMissingAlerted("agent-n")
+	if tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("alerted missing agent should not need another alert")
+	}
+}
+
+func TestAgentTrackerRetire(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := newAgentTracker(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-2", Hostname: "zebra", OS: "windows", AgentVersion: "0.5.1"}
+	tr.NoteHeartbeat(ev)
+	evB := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	evB.Host = &event.HostInfo{ID: "agent-1", Hostname: "alpha", OS: "linux"}
+	tr.NoteHeartbeat(evB)
+	snap := tr.Snapshot()
+	if len(snap) != 2 || snap[0].Hostname != "alpha" {
+		t.Fatalf("expected hostname sort, got %#v", snap)
+	}
+	if err := tr.Retire("agent-2"); err != nil {
+		t.Fatal(err)
+	}
+	snap = tr.Snapshot()
+	if len(snap) != 1 || snap[0].ID != "agent-1" {
+		t.Fatalf("expected retired host hidden, got %#v", snap)
 	}
 }
 

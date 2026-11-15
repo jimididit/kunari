@@ -2,8 +2,11 @@ package hub
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +23,7 @@ type agentView struct {
 	AgentVersion string    `json:"agent_version,omitempty"`
 	LastSeen     time.Time `json:"last_seen"`
 	Missing      bool      `json:"missing"`
+	Retired      bool      `json:"retired,omitempty"`
 	StaleAfter   string    `json:"stale_after,omitempty"`
 }
 
@@ -30,8 +34,10 @@ type agentRecord struct {
 	Tier           string    `json:"tier,omitempty"`
 	AgentVersion   string    `json:"agent_version,omitempty"`
 	LastSeen       time.Time `json:"last_seen"`
-	Missing        bool      `json:"missing"`
-	MissingAlerted bool      `json:"missing_alerted"`
+	Missing         bool `json:"missing"`
+	MissingAlerted  bool `json:"missing_alerted"`
+	RecoverPending  bool `json:"recover_pending,omitempty"`
+	Retired         bool `json:"retired,omitempty"`
 }
 
 type agentTracker struct {
@@ -39,6 +45,7 @@ type agentTracker struct {
 	path       string
 	staleAfter time.Duration
 	byID       map[string]*agentRecord
+	lastErr    string
 }
 
 func newAgentTracker(dataDir string, staleAfter time.Duration) (*agentTracker, error) {
@@ -54,12 +61,23 @@ func newAgentTracker(dataDir string, staleAfter time.Duration) (*agentTracker, e
 		staleAfter: staleAfter,
 		byID:       map[string]*agentRecord{},
 	}
-	_ = t.load()
+	if err := t.load(); err != nil {
+		t.lastErr = err.Error()
+	}
 	return t, nil
 }
 
 func (t *agentTracker) enabled() bool {
 	return t != nil && t.staleAfter > 0
+}
+
+func (t *agentTracker) PersistError() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastErr
 }
 
 func agentKey(ev *event.Event) string {
@@ -79,13 +97,15 @@ func agentKey(ev *event.Event) string {
 	return ""
 }
 
-func (t *agentTracker) NoteHeartbeat(ev *event.Event) {
+// NoteHeartbeat updates last-seen. recovered is true when a previously missing
+// (and not retired) agent returns.
+func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 	if t == nil || !t.enabled() {
-		return
+		return false
 	}
 	id := agentKey(ev)
 	if id == "" {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -94,10 +114,14 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
+	// Pair agent_recovered with a prior missing alert, or retry a failed recover emit.
+	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending)
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
 	rec.MissingAlerted = false
+	rec.RecoverPending = false
+	rec.Retired = false
 	if ev.Host != nil {
 		if ev.Host.Hostname != "" {
 			rec.Hostname = ev.Host.Hostname
@@ -112,7 +136,12 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) {
 	if ev.DetectionTier != "" {
 		rec.Tier = ev.DetectionTier
 	}
-	_ = t.persistLocked()
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
+	}
+	return wasMissing
 }
 
 // CheckMissing marks overdue agents and returns those still needing an alert.
@@ -126,7 +155,7 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	var out []*agentRecord
 	changed := false
 	for _, rec := range t.byID {
-		if rec.LastSeen.IsZero() {
+		if rec.Retired || rec.LastSeen.IsZero() {
 			continue
 		}
 		if now.Sub(rec.LastSeen) < t.staleAfter {
@@ -147,9 +176,43 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 		}
 	}
 	if changed {
-		_ = t.persistLocked()
+		if err := t.persistLocked(); err != nil {
+			t.lastErr = err.Error()
+		} else {
+			t.lastErr = ""
+		}
 	}
 	return out
+}
+
+// MarkRecoverPending arms a retry when agent_recovered failed to emit durably.
+func (t *agentTracker) MarkRecoverPending(id string) {
+	if t == nil || id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired {
+		return
+	}
+	rec.RecoverPending = true
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
+	}
+}
+
+// NeedsMissingAlert reports whether id is still missing and has not been alerted.
+func (t *agentTracker) NeedsMissingAlert(id string) bool {
+	if t == nil || id == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	return rec != nil && !rec.Retired && rec.Missing && !rec.MissingAlerted
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
@@ -164,7 +227,38 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 		return
 	}
 	rec.MissingAlerted = true
-	_ = t.persistLocked()
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
+	}
+}
+
+// Retire removes an agent from the active roster (reimaged / decommissioned hosts).
+func (t *agentTracker) Retire(id string) error {
+	if t == nil {
+		return fmt.Errorf("agent tracker disabled")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("invalid agent id")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil {
+		return fmt.Errorf("not found")
+	}
+	rec.Retired = true
+	rec.Missing = false
+	rec.MissingAlerted = true
+	rec.RecoverPending = false
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+		return err
+	}
+	t.lastErr = ""
+	return nil
 }
 
 func (t *agentTracker) Snapshot() []agentView {
@@ -173,12 +267,20 @@ func (t *agentTracker) Snapshot() []agentView {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now().UTC()
 	out := make([]agentView, 0, len(t.byID))
 	stale := ""
 	if t.staleAfter > 0 {
 		stale = t.staleAfter.String()
 	}
 	for _, rec := range t.byID {
+		if rec.Retired {
+			continue
+		}
+		missing := rec.Missing
+		if t.staleAfter > 0 && !rec.LastSeen.IsZero() {
+			missing = now.Sub(rec.LastSeen) >= t.staleAfter
+		}
 		out = append(out, agentView{
 			ID:           rec.ID,
 			Hostname:     rec.Hostname,
@@ -186,10 +288,17 @@ func (t *agentTracker) Snapshot() []agentView {
 			Tier:         rec.Tier,
 			AgentVersion: rec.AgentVersion,
 			LastSeen:     rec.LastSeen,
-			Missing:      rec.Missing,
+			Missing:      missing,
 			StaleAfter:   stale,
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		hi, hj := out[i].Hostname, out[j].Hostname
+		if hi != hj {
+			return hi < hj
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

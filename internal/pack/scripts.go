@@ -107,12 +107,16 @@ install -m 0755 "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 "$ROOT/decoys/"* "$PREFIX/decoys/"
+# Quarantine from a downloaded zip makes launchctl bootstrap fail with I/O error.
+xattr -dr com.apple.quarantine "$PREFIX" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$ROOT" 2>/dev/null || true
 PLIST_DST="/Library/LaunchDaemons/$UNIT_NAME.plist"
 if [[ "$UNIT_NAME" != "com.jimididit.kunari-sentinel" ]]; then
   launchctl bootout system/com.jimididit.kunari-sentinel 2>/dev/null || true
   rm -f /Library/LaunchDaemons/com.jimididit.kunari-sentinel.plist
 fi
 install -m 0644 "$PLIST_SRC" "$PLIST_DST"
+xattr -dr com.apple.quarantine "$PLIST_DST" 2>/dev/null || true
 launchctl bootout "system/$UNIT_NAME" 2>/dev/null || true
 launchctl bootstrap system "$PLIST_DST"
 launchctl enable "system/$UNIT_NAME"

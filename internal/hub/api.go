@@ -126,6 +126,35 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
+	hostID := strings.TrimSpace(q.Get("host_id"))
+	excludeHB := q.Get("exclude_heartbeats") == "1" || q.Get("exclude_heartbeats") == "true"
+	// latest=1: return the newest matches (sliding window). Default filtered
+	// paging is oldest-first and stops at limit so next_seq does not skip matches.
+	latest := q.Get("latest") == "1" || q.Get("latest") == "true"
+
+	if hostID != "" || excludeHB || latest {
+		// Cap only the filtered/latest scan path; unfiltered listing keeps caller limit.
+		if limit > 500 {
+			limit = 500
+		}
+		matched, nextSeq, err := h.scanEvents(after, limit, hostID, excludeHB, latest)
+		if err != nil {
+			h.log.Error("list events", "err", err)
+			http.Error(w, "error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"events":   matched,
+			"count":    len(matched),
+			// next_seq is the last scanned sequence so clients can resume.
+			"next_seq": nextSeq,
+			"last_seq": h.chain.LastSeq(),
+			"latest":   latest,
+		})
+		return
+	}
+
 	events, next, err := event.ReadAfter(h.chain.FilePath(), after, limit)
 	if err != nil {
 		h.log.Error("list events", "err", err)
@@ -142,4 +171,58 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		"next_seq": next,
 		"last_seq": h.chain.LastSeq(),
 	})
+}
+
+// scanEvents walks the chain and returns up to limit matching events plus the last
+// scanned sequence. When latest is false, results are oldest-first and the scan
+// stops once limit matches are found (safe forward pagination). When latest is
+// true, a sliding window keeps the newest matches across the scan cap.
+func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB, latest bool) ([]event.Event, uint64, error) {
+	const maxScan = 10000
+	if limit < 1 {
+		limit = 1
+	}
+	// For latest windows, start near the tip so a long chain is not sampled from the head.
+	if latest && after == 0 {
+		if last := h.chain.LastSeq(); last > uint64(maxScan) {
+			after = last - uint64(maxScan)
+		}
+	}
+	matched := make([]event.Event, 0, limit)
+	scanned := 0
+	nextSeq := after
+	for scanned < maxScan {
+		batch, _, err := event.ReadAfter(h.chain.FilePath(), after, 1000)
+		if err != nil {
+			return nil, nextSeq, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for i := range batch {
+			after = batch[i].Integrity.Seq
+			nextSeq = after
+			scanned++
+			if excludeHB && batch[i].TokenID == "heartbeat" {
+				continue
+			}
+			if hostID != "" {
+				if batch[i].Host == nil || batch[i].Host.ID != hostID {
+					continue
+				}
+			}
+			matched = append(matched, batch[i])
+			if latest {
+				if len(matched) > limit {
+					matched = matched[len(matched)-limit:]
+				}
+			} else if len(matched) >= limit {
+				return matched, nextSeq, nil
+			}
+		}
+		if len(batch) < 1000 {
+			break
+		}
+	}
+	return matched, nextSeq, nil
 }

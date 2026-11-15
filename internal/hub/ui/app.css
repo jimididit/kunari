@@ -171,9 +171,112 @@ input:focus {
 
 .status-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.65rem;
   margin-bottom: 1rem;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  justify-content: flex-end;
+}
+
+.filters .chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.filters input[type="search"] {
+  width: 9rem;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+td.path {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+tr.row-alert td {
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.error.tight {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+}
+
+.drawer {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem 1rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.drawer-sub {
+  margin: 0.85rem 0 0.4rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.drawer-meta {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.drawer-meta dt {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.drawer-meta dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+tr.agent-row {
+  cursor: pointer;
+}
+
+tr.agent-row:hover td {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .stat {

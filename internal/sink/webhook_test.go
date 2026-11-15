@@ -105,6 +105,24 @@ func TestHubPushBlocksMetadataLiterals(t *testing.T) {
 	}
 }
 
+func TestThrottleHostSeparates(t *testing.T) {
+	th := sink.NewThrottle(time.Minute)
+	a := event.New("tok", "sentinel", "inotify", "open")
+	a.Host = &event.HostInfo{ID: "host-a"}
+	a.Actor = &event.Actor{Exe: "notepad.exe"}
+	ok, _ := th.Allow(a)
+	if !ok {
+		t.Fatal("first allow")
+	}
+	b := event.New("tok", "sentinel", "inotify", "open")
+	b.Host = &event.HostInfo{ID: "host-b"}
+	b.Actor = &event.Actor{Exe: "notepad.exe"}
+	ok, _ = th.Allow(b)
+	if !ok {
+		t.Fatal("second host should not be suppressed by first")
+	}
+}
+
 func TestThrottleSuppresses(t *testing.T) {
 	th := sink.NewThrottle(time.Minute)
 	ev := event.New("tok", "beacon", "beacon-https", "beacon_fetch")

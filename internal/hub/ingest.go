@@ -126,14 +126,27 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	// Only token_id identifies control-plane heartbeats. Do not trust action alone:
 	// a signed ingest with action=heartbeat on a real token must still alert.
 	if ev.TokenID == "heartbeat" {
-		h.agents.NoteHeartbeat(ev)
+		// Hold agentMu so missing/recovered emits cannot interleave with this heartbeat.
+		// Append before NoteHeartbeat so a failed chain write does not clear Missing
+		// and drop the recovery transition on retry.
+		h.agentMu.Lock()
+		defer h.agentMu.Unlock()
 		if err := h.chain.Append(ev); err != nil {
 			return err
 		}
+		recovered := h.agents.NoteHeartbeat(ev)
 		// Heartbeats are control-plane: record + track, do not alert/SSE flood.
 		h.mu.Lock()
 		h.hits++
 		h.mu.Unlock()
+		if recovered {
+			if err := h.emitAgentRecoveredLocked(ev); err != nil {
+				// Re-arm so a later heartbeat retries agent_recovered.
+				if id := agentKey(ev); id != "" {
+					h.agents.MarkRecoverPending(id)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -172,6 +185,7 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	}
 	h.mu.Lock()
 	h.hits++
+	h.alerts++
 	h.mu.Unlock()
 	return nil
 }
@@ -197,8 +211,19 @@ func (h *Hub) watchAgents(ctx context.Context) {
 }
 
 func (h *Hub) emitMissingAgents(now time.Time) {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
 	for _, rec := range h.agents.CheckMissing(now) {
-		ev := event.New(rec.ID, "hub", "agent-watch", "agent_missing")
+		// Re-check under agentMu: a heartbeat may have cleared Missing since the snapshot.
+		if !h.agents.NeedsMissingAlert(rec.ID) {
+			continue
+		}
+		tier := rec.Tier
+		if tier == "" {
+			tier = "agent-watch"
+		}
+		// token_id stays a control-plane marker so the UI token column is not a decoy id.
+		ev := event.New("agent_status", "hub", tier, "agent_missing")
 		ev.Memo = "sentinel heartbeat overdue"
 		ev.Host = &event.HostInfo{
 			ID:           rec.ID,
@@ -212,15 +237,48 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 			continue
 		}
 		h.subs.Broadcast(ev)
+		// Mark after chain append so enqueue failure cannot re-append duplicates.
+		h.agents.MarkMissingAlerted(rec.ID)
 		if err := h.queue.Enqueue(ev); err != nil {
 			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)
-			continue
 		}
-		// Mark alerted only after durable emit so a failed append/enqueue can retry.
-		h.agents.MarkMissingAlerted(rec.ID)
 		h.log.Info("agent missing", "agent_id", rec.ID, "hostname", rec.Hostname, "last_seen", rec.LastSeen)
 		h.mu.Lock()
 		h.hits++
+		h.alerts++
 		h.mu.Unlock()
 	}
+}
+
+// emitAgentRecoveredLocked requires h.agentMu held by the caller.
+// Returns an error only when the chain append fails (safe to retry).
+// Enqueue failure is logged but not retried - the event is already chained/broadcast.
+func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) error {
+	ev := event.New("agent_status", "hub", "agent-watch", "agent_recovered")
+	ev.Memo = "sentinel heartbeat resumed"
+	if hb != nil && hb.Host != nil {
+		ev.Host = &event.HostInfo{
+			ID:           hb.Host.ID,
+			Hostname:     hb.Host.Hostname,
+			OS:           hb.Host.OS,
+			AgentVersion: hb.Host.AgentVersion,
+		}
+		if hb.DetectionTier != "" {
+			ev.DetectionTier = hb.DetectionTier
+		}
+	}
+	ev.Confidence.Action = "inferred"
+	if err := h.chain.Append(ev); err != nil {
+		h.log.Error("agent_recovered chain", "err", err)
+		return err
+	}
+	h.subs.Broadcast(ev)
+	if err := h.queue.Enqueue(ev); err != nil {
+		h.log.Error("agent_recovered enqueue", "err", err)
+	}
+	h.mu.Lock()
+	h.hits++
+	h.alerts++
+	h.mu.Unlock()
+	return nil
 }

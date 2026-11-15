@@ -29,16 +29,49 @@ func (h *Hub) handleOperatorStatus(w http.ResponseWriter, r *http.Request) {
 	if agents == nil {
 		agents = []agentView{}
 	}
+	persistErr := ""
+	if h.agents != nil {
+		persistErr = h.agents.PersistError()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":       true,
-		"hits":     h.Hits(),
-		"last_seq": h.chain.LastSeq(),
-		"ingest":   len(h.ingestSecret) > 0,
-		"api":      len(h.apiToken) > 0,
-		"queue":    qs,
-		"agents":   agents,
-		"ts":       time.Now().UTC(),
+		"ok":              true,
+		"hits":            h.Hits(),
+		"alerts":          h.Alerts(),
+		"last_seq":        h.chain.LastSeq(),
+		"ingest":          len(h.ingestSecret) > 0,
+		"api":             len(h.apiToken) > 0,
+		"queue":           qs,
+		"agents":          agents,
+		"agents_persist_error": persistErr,
+		"ts":              time.Now().UTC(),
+	})
+}
+
+func (h *Hub) handleRetireAgent(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "invalid agent id", http.StatusBadRequest)
+		return
+	}
+	if h.agents == nil || !h.agents.enabled() {
+		http.Error(w, "agent watch disabled", http.StatusBadRequest)
+		return
+	}
+	if err := h.agents.Retire(id); err != nil {
+		if err.Error() == "not found" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		h.log.Error("retire agent", "agent_id", id, "err", err)
+		http.Error(w, "error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":        true,
+		"agent_id":  id,
+		"retired":   true,
 	})
 }
 

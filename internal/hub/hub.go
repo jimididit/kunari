@@ -53,7 +53,9 @@ type Hub struct {
 	agents         *agentTracker
 	trustedProxies []*net.IPNet
 	mu             sync.Mutex
+	agentMu        sync.Mutex // serializes missing vs recovered agent emits
 	hits           int
+	alerts         int // non-heartbeat operator-visible alerts
 }
 
 func New(cfg Config) (*Hub, error) {
@@ -254,6 +256,7 @@ func (h *Hub) recordBeacon(tokenID, tier string, netInfo *event.Network) error {
 	}
 	h.mu.Lock()
 	h.hits++
+	h.alerts++
 	h.mu.Unlock()
 	return nil
 }
@@ -262,4 +265,10 @@ func (h *Hub) Hits() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.hits
+}
+
+func (h *Hub) Alerts() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.alerts
 }
