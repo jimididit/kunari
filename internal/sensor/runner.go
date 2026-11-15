@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	kcrypto "github.com/jimididit/kunari/internal/crypto"
@@ -19,16 +22,23 @@ import (
 
 // Runner wires a Watcher to the evidence chain, sinks, allowlist, and heartbeat.
 type Runner struct {
-	Cfg     *Config
-	Log     *slog.Logger
-	Watcher Watcher
-	keys    *kcrypto.KeyPair
-	chain   *event.Chain
-	queue   *sink.Queue
-	hubPush sink.Sink // optional; heartbeats Deliver here without alert-queue spam
-	agentID string
-	byPath   map[string]Target
-	copyCorr *copyCorrelator
+	Cfg        *Config
+	ConfigPath string // on-disk sentinel.json for reload_config / set_targets persistence
+	Log        *slog.Logger
+	Watcher    Watcher
+	keys       *kcrypto.KeyPair
+	chain      *event.Chain
+	queue      *sink.Queue
+	hubPush    sink.Sink // optional; heartbeats Deliver here without alert-queue spam
+	hubSecret  []byte
+	hubPubKey  ed25519.PublicKey // verifies control-plane job Ed25519 sigs
+	agentID    string
+	byPath     map[string]Target
+	copyCorr   *copyCorrelator
+	watchMu    sync.Mutex
+	reloadReq  chan *Config
+	reloadAck  chan error
+	reloading  atomic.Bool
 }
 
 func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
@@ -63,15 +73,28 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	}
 	sinks := []sink.Sink{fileSink, sink.NewStdoutSink()}
 	var hubPush sink.Sink
+	var hubSecret []byte
+	var hubPub ed25519.PublicKey
 	if cfg.HubURL != "" || cfg.HubSecretFile != "" {
-		hubSink, err := newHubPushSink(cfg)
+		hubSink, secret, err := newHubPushSinkWithSecret(cfg)
 		if err != nil {
 			return nil, err
 		}
 		hubPush = hubSink
+		hubSecret = secret
 		sinks = append(sinks, hubSink)
 		// Log host only - full ingest URL and paths help local enumerators.
 		log.Info("sentinel hub push enabled", "hub", hubPushLogHost(cfg.HubURL))
+		if cfg.HubPubKeyFile != "" {
+			pub, err := loadHubPubKey(cfg.HubPubKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("hub_pubkey_file: %w", err)
+			}
+			hubPub = pub
+			log.Info("sentinel job verify enabled", "hub_pubkey_file", cfg.HubPubKeyFile)
+		} else {
+			log.Info("sentinel job pull disabled (set hub_pubkey_file to verify Ed25519 jobs)")
+		}
 	}
 	q, err := sink.NewQueue(filepath.Join(cfg.DataDir, "queue"), log, sinks...)
 	if err != nil {
@@ -92,8 +115,10 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	}
 	return &Runner{
 		Cfg: cfg, Log: log, Watcher: w, keys: keys, chain: chain, queue: q,
-		hubPush: hubPush, agentID: agentID, byPath: byPath,
-		copyCorr: newCopyCorrelator(defaultCopyWindow),
+		hubPush: hubPush, hubSecret: hubSecret, hubPubKey: hubPub, agentID: agentID, byPath: byPath,
+		copyCorr:  newCopyCorrelator(defaultCopyWindow),
+		reloadReq: make(chan *Config, 1),
+		reloadAck: make(chan error, 1),
 	}, nil
 }
 
@@ -115,16 +140,18 @@ func (r *Runner) Run(ctx context.Context) error {
 	go r.queue.Run(ctx)
 
 	touches := make(chan Touch, 64)
+	watchCtx, watchCancel := context.WithCancel(ctx)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- r.Watcher.Run(ctx, touches)
+		errCh <- r.Watcher.Run(watchCtx, touches)
 	}()
 
 	hb := time.NewTicker(r.Cfg.HeartbeatDuration())
 	defer hb.Stop()
 
-	// Initial heartbeat
+	// Initial heartbeat; job poll runs on its own goroutine so reload can use reloadReq.
 	r.emitHeartbeat(ctx, false)
+	go r.jobPollLoop(ctx)
 
 	lastWatcherHash := r.Watcher.ConfigHash()
 	lastCfgHash := r.Cfg.Hash()
@@ -132,12 +159,30 @@ func (r *Runner) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			watchCancel()
 			return nil
 		case err := <-errCh:
-			if err != nil && ctx.Err() == nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if r.reloading.Load() {
+				continue
+			}
+			if err != nil {
 				return err
 			}
 			return nil
+		case cfg := <-r.reloadReq:
+			err := r.swapWatcher(ctx, &watchCancel, errCh, touches, cfg)
+			select {
+			case r.reloadAck <- err:
+			default:
+			}
+			if err == nil {
+				lastWatcherHash = r.Watcher.ConfigHash()
+				lastCfgHash = r.Cfg.Hash()
+				r.emitHeartbeat(ctx, false)
+			}
 		case <-hb.C:
 			drift := r.Watcher.ConfigHash() != lastWatcherHash || r.Cfg.Hash() != lastCfgHash
 			if drift {
@@ -153,6 +198,86 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.handleTouch(ctx, t)
 		}
 	}
+}
+
+func loadHubPubKey(path string) (ed25519.PublicKey, error) {
+	path, err := safepath.Clean(path)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
+	if err != nil {
+		return nil, err
+	}
+	hexKey := string(trimSecret(raw))
+	b, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("hub pubkey must be hex: %w", err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("hub pubkey must be %d bytes", ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
+}
+
+func (r *Runner) jobPollLoop(ctx context.Context) {
+	if r.hubSecret == nil || r.Cfg.HubURL == "" || len(r.hubPubKey) == 0 {
+		return
+	}
+	r.pollJobs(ctx)
+	t := time.NewTicker(r.jobPollInterval())
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.pollJobs(ctx)
+		}
+	}
+}
+
+func (r *Runner) swapWatcher(ctx context.Context, watchCancel *context.CancelFunc, errCh chan error, touches chan Touch, cfg *Config) error {
+	r.watchMu.Lock()
+	defer r.watchMu.Unlock()
+	r.reloading.Store(true)
+	defer r.reloading.Store(false)
+	(*watchCancel)()
+	// Drain watcher exit
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		r.Log.Info("watcher stop slow during reload")
+	}
+	_ = r.Watcher.Close()
+	w, err := OpenBest(cfg.Targets, cfg.PreferTier)
+	if err != nil {
+		// Best-effort restore previous watcher
+		old, restoreErr := OpenBest(r.Cfg.Targets, r.Cfg.PreferTier)
+		if restoreErr != nil {
+			return fmt.Errorf("open new watcher: %v; restore: %w", err, restoreErr)
+		}
+		r.Watcher = old
+		cctx, c := context.WithCancel(ctx)
+		*watchCancel = c
+		go func() { errCh <- r.Watcher.Run(cctx, touches) }()
+		return err
+	}
+	if restorer, ok := w.(interface{ RestoreSeen(string) error }); ok {
+		_ = restorer.RestoreSeen(cfg.DataDir)
+	}
+	byPath := map[string]Target{}
+	for _, t := range cfg.Targets {
+		byPath[filepath.Clean(t.Path)] = t
+	}
+	r.Cfg = cfg
+	r.Watcher = w
+	r.byPath = byPath
+	cctx, c := context.WithCancel(ctx)
+	*watchCancel = c
+	go func() { errCh <- r.Watcher.Run(cctx, touches) }()
+	r.Log.Info("sentinel reloaded", "tier", w.Tier(), "targets", len(cfg.Targets))
+	return nil
 }
 
 func (r *Runner) handleTouch(ctx context.Context, t Touch) {
@@ -275,29 +400,38 @@ func (r *Runner) hostInfo() *event.HostInfo {
 }
 
 func newHubPushSink(cfg *Config) (*sink.WebhookSink, error) {
+	s, _, err := newHubPushSinkWithSecret(cfg)
+	return s, err
+}
+
+func newHubPushSinkWithSecret(cfg *Config) (*sink.WebhookSink, []byte, error) {
 	if cfg.HubURL == "" {
-		return nil, fmt.Errorf("hub_secret_file set but hub_url is empty")
+		return nil, nil, fmt.Errorf("hub_secret_file set but hub_url is empty")
 	}
 	if cfg.HubSecretFile == "" {
-		return nil, fmt.Errorf("hub_url set but hub_secret_file is empty")
+		return nil, nil, fmt.Errorf("hub_url set but hub_secret_file is empty")
 	}
 	path, err := safepath.Clean(cfg.HubSecretFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	raw, err := os.ReadFile(path) // #nosec G304 -- path cleaned by safepath.Clean
 	if err != nil {
-		return nil, fmt.Errorf("hub_secret_file: %w", err)
+		return nil, nil, fmt.Errorf("hub_secret_file: %w", err)
 	}
 	secret := trimSecret(raw)
 	if decoded, err := hex.DecodeString(string(secret)); err == nil && len(decoded) >= 16 {
 		secret = decoded
 	}
 	if len(secret) < 16 {
-		return nil, fmt.Errorf("hub_secret_file must contain at least 16 bytes")
+		return nil, nil, fmt.Errorf("hub_secret_file must contain at least 16 bytes")
 	}
 	base := strings.TrimRight(cfg.HubURL, "/")
-	return sink.NewHubPushSink(base+"/api/v1/ingest", secret)
+	sinkClient, err := sink.NewHubPushSink(base+"/api/v1/ingest", secret)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sinkClient, append([]byte(nil), secret...), nil
 }
 
 func trimSecret(b []byte) []byte {

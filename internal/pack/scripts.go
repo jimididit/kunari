@@ -47,6 +47,7 @@ install -d -m 0700 -o kunari -g kunari "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" 
 install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
+install -m 0600 -o kunari -g kunari "$ROOT/etc/hub.pub" "$PREFIX/etc/hub.pub"
 install -m 0600 -o kunari -g kunari "$ROOT/decoys/"* "$PREFIX/decoys/"
 
 WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
@@ -191,6 +192,7 @@ install -d -m 0700 "$PREFIX" "$PREFIX/decoys" "$PREFIX/etc" "$PREFIX/data" "$PRE
 install -m 0755 "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
+install -m 0600 "$ROOT/etc/hub.pub" "$PREFIX/etc/hub.pub"
 install -m 0600 "$ROOT/decoys/"* "$PREFIX/decoys/"
 
 WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
@@ -358,6 +360,7 @@ New-Item -ItemType Directory -Force -Path $Prefix, (Join-Path $Prefix 'decoys'),
 Copy-Item -LiteralPath $BinSrc -Destination (Join-Path $Prefix ('bin\' + $BinName)) -Force
 Copy-Item -LiteralPath (Join-Path $Root 'etc\sentinel.json') -Destination (Join-Path $Prefix 'etc\sentinel.json') -Force
 Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secret') -Force
+Copy-Item -LiteralPath (Join-Path $Root 'etc\hub.pub') -Destination (Join-Path $Prefix 'etc\hub.pub') -Force
 Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
 
 # Restrict package tree to local Administrators + SYSTEM (secrets stay private).

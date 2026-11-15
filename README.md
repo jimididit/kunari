@@ -115,11 +115,17 @@ Secrets live under the hub `--data` directory (`ingest.secret`, `api.token`). Ne
 | `GET /healthz` | none | Liveness + hit counters |
 | `GET\|HEAD /b/{token}` | none | HTTPS beacon |
 | `POST /api/v1/ingest` | HMAC (`X-Kunari-*`) | Sentinel events + heartbeats; hub may emit `agent_missing` when an agent goes silent |
-| `GET /api/v1/status` | Bearer / `X-Kunari-API-Key` | Hits, last seq, queue, agents (last-seen / missing) |
+| `POST /api/v1/jobs/pull` | HMAC (`X-Kunari-*`) | Sentinel pulls allowlisted control jobs |
+| `POST /api/v1/jobs/result` | HMAC (`X-Kunari-*`) | Sentinel reports job completion |
+| `POST /api/v1/agents/{id}/jobs` | Bearer / `X-Kunari-API-Key` | Queue a signed job (`reload_config`, `set_targets`, `status_dump`, `ack_missing`, `rotate_hub_url_hint`) |
+| `GET /api/v1/jobs/audit` | Bearer / `X-Kunari-API-Key` | Control-plane audit trail |
+| `GET /api/v1/status` | Bearer / `X-Kunari-API-Key` | Hits, last seq, queue, agents (last-seen / missing), pending jobs |
 | `GET /api/v1/events` | Bearer / `X-Kunari-API-Key` | Paginated pull (`after_seq`, `limit`) |
 | `GET /api/v1/events/stream` | Bearer or `?token=` | Live SSE |
 | `GET /api/v1/tokens` | Bearer / `X-Kunari-API-Key` | Registry inventory (no signatures) |
 | `POST /api/v1/tokens/{id}/revoke` | Bearer / `X-Kunari-API-Key` | Revoke a forged token |
+
+Control-plane jobs are pull-only allowlisted verbs (reload watches, status dump, ack missing, rotate hub URL hint). Not a shell, not arbitrary exec. Job envelopes are **Ed25519-signed by the hub** (agents verify with provisioned `hub_pubkey_file` / pack `etc/hub.pub`). Job pull/result still use the shared ingest HMAC for transport auth and require agent watch plus a recent heartbeat for that `agent_id`. Job pull/result use the shared ingest HMAC and require a recent heartbeat for that `agent_id` (compromised agents on the same secret can still impersonate each other until per-agent secrets land).
 
 Behind a TLS terminator (required for realistic off-host HTTPS beacons):
 

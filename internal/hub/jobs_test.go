@@ -1,0 +1,463 @@
+package hub
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/json"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jimididit/kunari/internal/event"
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
+)
+
+func testJobKeys(t *testing.T) *kcrypto.KeyPair {
+	t.Helper()
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+func TestJobStoreEnqueuePullComplete(t *testing.T) {
+	dir := t.TempDir()
+	keys := testJobKeys(t)
+	s, err := newJobStore(dir, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("agent-a", VerbStatusDump, "operator", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Sig == "" || j.Status != jobStatusQueued {
+		t.Fatalf("bad job: %+v", j)
+	}
+	if err := VerifyJobSig(keys.Public, j); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 1 || got[0].ID != j.ID || got[0].Status != jobStatusInflight {
+		t.Fatalf("pull: %v %+v", err, got)
+	}
+	leased, _ := s.Pull("agent-a", 5)
+	if len(leased) != 0 {
+		t.Fatalf("expected lease to suppress re-pull, got %d", len(leased))
+	}
+	if _, err := s.Complete("agent-a", j.ID+"-missing", `{"ok":true}`, ""); err == nil {
+		t.Fatal("complete unknown job must fail")
+	}
+	done, err := s.Complete("agent-a", j.ID, `{"ok":true}`, "")
+	if err != nil || done.Status != jobStatusDone {
+		t.Fatalf("complete: %v %+v", err, done)
+	}
+	again, _ := s.Pull("agent-a", 5)
+	if len(again) != 0 {
+		t.Fatalf("expected empty pull, got %d", len(again))
+	}
+}
+
+func TestJobStoreTrimNeverEvictsActive(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	now := time.Now().UTC()
+	for i := 0; i < maxJobsPersisted+5; i++ {
+		id := "done-" + strconv.Itoa(i)
+		s.jobs[id] = &Job{
+			ID: id, AgentID: "a", Verb: VerbStatusDump, Status: jobStatusDone,
+			CreatedAt: now.Add(-time.Duration(i) * time.Second), Args: json.RawMessage(`{}`),
+		}
+	}
+	activeIDs := []string{"active-0", "active-1", "active-2"}
+	for _, id := range activeIDs {
+		s.jobs[id] = &Job{
+			ID: id, AgentID: "b", Verb: VerbStatusDump, Status: jobStatusQueued,
+			CreatedAt: now, Args: json.RawMessage(`{}`),
+		}
+	}
+	s.trimLocked()
+	for _, id := range activeIDs {
+		if stored := s.jobs[id]; stored == nil || stored.Status != jobStatusQueued {
+			s.mu.Unlock()
+			t.Fatalf("active job evicted: %s", id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+func TestVerifyJobSigDoesNotMutateArgs(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Args = nil
+	if err := VerifyJobSig(keys.Public, j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Args != nil {
+		t.Fatalf("VerifyJobSig mutated Args: %s", j.Args)
+	}
+}
+
+func TestJobStoreCompleteRejectsQueued(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := s.Enqueue("agent-a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Complete("agent-a", queued.ID, `{"ok":true}`, ""); err == nil {
+		t.Fatal("complete queued must error")
+	}
+}
+
+func TestJobStoreInflightNotExpiredUnderLease(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("agent-a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("pull: %v %+v", err, got)
+	}
+	// Force expiry in the past while lease is still live.
+	s.mu.Lock()
+	stored := s.jobs[j.ID]
+	stored.ExpiresAt = time.Now().UTC().Add(-time.Second)
+	s.mu.Unlock()
+	again, err := s.Pull("agent-a", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("leased inflight must not re-pull: %+v", again)
+	}
+	s.mu.Lock()
+	if s.jobs[j.ID].Status != jobStatusInflight {
+		s.mu.Unlock()
+		t.Fatalf("leased inflight must not expire early: %s", s.jobs[j.ID].Status)
+	}
+	s.mu.Unlock()
+	done, err := s.Complete("agent-a", j.ID, `{"ok":true}`, "")
+	if err != nil || done.Status != jobStatusDone {
+		t.Fatalf("complete under expired-but-leased job: %v %+v", err, done)
+	}
+}
+
+func TestJobStoreCanonicalArgsSig(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbSetTargets, "op", json.RawMessage("{\n  \"targets\": []\n}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(j.Args) != `{"targets":[]}` {
+		t.Fatalf("args not compacted: %s", j.Args)
+	}
+	if err := VerifyJobSig(keys.Public, j); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyJobSigRejectsBadPubkey(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(nil, j); err == nil {
+		t.Fatal("expected reject for nil pubkey")
+	}
+	if err := VerifyJobSig(ed25519.PublicKey{1, 2, 3}, j); err == nil {
+		t.Fatal("expected reject for short pubkey")
+	}
+}
+
+func TestUnescapeJSONHTMLPreservesLiteralBackslashU(t *testing.T) {
+	in := []byte(`{"x":"\\u0026\\u003c"}`)
+	out := unescapeJSONHTML(in)
+	if !bytes.Equal(out, in) {
+		t.Fatalf("literal \\uXXXX corrupted: %s", out)
+	}
+	in2 := []byte(`{"x":"a\u0026b"}`)
+	out2 := unescapeJSONHTML(in2)
+	if string(out2) != `{"x":"a&b"}` {
+		t.Fatalf("HTML escape not undone: %s", out2)
+	}
+}
+
+func TestJobSigSurvivesHTMLCharsAndJSONTransport(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := json.RawMessage(`{"url":"https://ex.com?a=1&b=2","note":"<hint>"}`)
+	j, err := s.Enqueue("a", VerbSetTargets, "op", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(j.Args, []byte(`\u0026`)) || bytes.Contains(j.Args, []byte(`\u003c`)) {
+		t.Fatalf("canonical args still HTML-escaped: %s", j.Args)
+	}
+	// Simulate default encoding/json EscapeHTML=true transport, then agent decode.
+	var wire bytes.Buffer
+	enc := json.NewEncoder(&wire)
+	enc.SetEscapeHTML(true)
+	if err := enc.Encode(map[string]any{"jobs": []Job{*j}}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Jobs) != 1 {
+		t.Fatalf("jobs: %d", len(out.Jobs))
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("sig after HTML transport: %v\nargs=%s", err, out.Jobs[0].Args)
+	}
+}
+
+func TestJobStoreAckMissingEnqueueCompleted(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.EnqueueCompleted("agent-a", VerbAckMissing, "op", nil, "acked by operator", "", "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Status != jobStatusDone || string(j.Args) != `{}` {
+		t.Fatalf("want done with args {}: %+v", j)
+	}
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("completed ack_missing must not be pullable: %v %+v", err, got)
+	}
+	if got, err := s.Complete("agent-a", j.ID, "spoof", ""); err != nil || got.Status != jobStatusDone {
+		t.Fatalf("idempotent Complete on done: %v %+v", err, got)
+	}
+	if len(s.Audit(5)) == 0 || !strings.Contains(s.Audit(5)[0].Actor, "operator") {
+		t.Fatalf("hub complete audit actor: %+v", s.Audit(5))
+	}
+	if _, err := s.EnqueueCompleted("agent-a", VerbStatusDump, "op", nil, "skip agent", "", "op"); err == nil {
+		t.Fatal("EnqueueCompleted must reject agent-side verbs")
+	}
+	if _, err := s.Enqueue("agent-a", VerbAckMissing, "op", nil); err == nil {
+		t.Fatal("Enqueue must reject hub-side verbs")
+	}
+}
+
+func TestJobSigSurvivesLineSeparatorArgs(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// U+2028 / U+2029 are always escaped by encoding/json.
+	raw := json.RawMessage("{\"note\":\"a\u2028b\u2029c\"}")
+	j, err := s.Enqueue("a", VerbSetTargets, "op", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	enc := json.NewEncoder(&wire)
+	enc.SetEscapeHTML(true)
+	if err := enc.Encode(map[string]any{"jobs": []Job{*j}}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("sig after U+2028 transport: %v args=%s", err, out.Jobs[0].Args)
+	}
+}
+
+func TestJobArgsNeverNullOnWire(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(j); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`"args":null`)) || !bytes.Contains(buf.Bytes(), []byte(`"args":{}`)) {
+		t.Fatalf("args must serialize as {}: %s", buf.Bytes())
+	}
+	// Omitted/null args after transport still verify.
+	j2 := *j
+	j2.Args = nil
+	var wire bytes.Buffer
+	_ = json.NewEncoder(&wire).Encode(map[string]any{"jobs": []Job{j2}})
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("omitted args must still verify: %v args=%q", err, out.Jobs[0].Args)
+	}
+}
+
+func TestJobStoreRejectsUnknownVerb(t *testing.T) {
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("a", "shell_exec", "op", nil); err == nil {
+		t.Fatal("expected reject")
+	}
+}
+
+func TestJobStoreExpire(t *testing.T) {
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("agent-a", VerbReloadConfig, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.jobs[j.ID].ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	s.mu.Unlock()
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("expected expired skip: %v %+v", err, got)
+	}
+}
+
+func TestJobStorePersistRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	keys := testJobKeys(t)
+	s, err := newJobStore(dir, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("agent-b", VerbSetTargets, "op", json.RawMessage(`{"targets":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := newJobStore(dir, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s2.ListForAgent("agent-b", 10)) != 1 {
+		t.Fatal("persist lost jobs")
+	}
+	if _, err := filepath.Rel(dir, s.path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJobStoreTrimAuditIndependent(t *testing.T) {
+	s, err := newJobStore(t.TempDir(), testJobKeys(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	for i := 0; i < maxJobsPersisted+50; i++ {
+		s.audit = append(s.audit, AuditEntry{JobID: "x", Verb: "status_dump"})
+	}
+	s.trimLocked()
+	if len(s.audit) > maxJobsPersisted {
+		t.Fatalf("audit not trimmed: %d", len(s.audit))
+	}
+	s.mu.Unlock()
+}
+
+func TestAgentTrackerAckMissing(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := newAgentTracker(dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "ack-agent", Hostname: "lab", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	_ = tr.CheckMissing(time.Now().UTC().Add(200 * time.Millisecond))
+	if !tr.ClaimMissingAlert("ack-agent") {
+		t.Fatal("expected claim")
+	}
+	if tr.ClaimMissingAlert("ack-agent") {
+		t.Fatal("double claim must fail")
+	}
+	// alertClaimed is memory-only: reload must allow retry until MarkMissingAlerted persists.
+	tr2, err := newAgentTracker(dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tr2.CheckMissing(time.Now().UTC().Add(200 * time.Millisecond))
+	if !tr2.ClaimMissingAlert("ack-agent") {
+		t.Fatal("claim must be retryable after crash before mark")
+	}
+	tr.AbortMissingAlert("ack-agent") // clear local claim so Ack below is clean
+	tr2.MarkMissingAlerted("ack-agent")
+	tr3, err := newAgentTracker(dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr3.ClaimMissingAlert("ack-agent") {
+		t.Fatal("marked alert must survive reload")
+	}
+	if err := tr.AckMissing("ack-agent"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.CheckMissing(time.Now().UTC().Add(300 * time.Millisecond)); len(got) != 0 {
+		t.Fatalf("acked agent should not re-alert: %+v", got)
+	}
+	snap := tr.Snapshot()
+	if len(snap) != 1 || snap[0].Missing || !snap[0].Acked {
+		t.Fatalf("snapshot after ack: %+v", snap)
+	}
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "healthy", Hostname: "lab", OS: "linux"}
+	tr.NoteHeartbeat(ev2)
+	if err := tr.AckMissing("healthy"); err == nil {
+		t.Fatal("expected reject ack on healthy agent")
+	}
+}

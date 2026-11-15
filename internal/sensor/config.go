@@ -26,6 +26,9 @@ type Config struct {
 	// with HubSecretFile, alerts are HMAC-POSTed to {HubURL}/api/v1/ingest.
 	HubURL        string `json:"hub_url,omitempty"`
 	HubSecretFile string `json:"hub_secret_file,omitempty"` // path to shared ingest secret
+	// HubPubKeyFile is the hub Ed25519 public key (hex) used to verify control-plane jobs.
+	// Required for job pull; provisioned out-of-band (not delivered over ingest HMAC).
+	HubPubKeyFile string `json:"hub_pubkey_file,omitempty"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -92,6 +95,14 @@ func WriteExampleConfig(path string, targets []Target, hubURL, hubSecretFile str
 		AgentVersion:   "0.1.0-dev",
 		HubURL:         hubURL,
 		HubSecretFile:  hubSecretFile,
+	}
+	return SaveConfig(path, &c)
+}
+
+// SaveConfig writes sentinel config with restrictive permissions.
+func SaveConfig(path string, c *Config) error {
+	if c == nil {
+		return fmt.Errorf("nil config")
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

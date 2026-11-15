@@ -27,8 +27,11 @@
   var agentDrawer = document.getElementById("agent-drawer");
   var drawerTitle = document.getElementById("drawer-title");
   var drawerMeta = document.getElementById("drawer-meta");
+  var drawerActions = document.getElementById("drawer-actions");
   var drawerEvents = document.getElementById("drawer-events");
   var drawerEmpty = document.getElementById("drawer-empty");
+  var auditBody = document.getElementById("audit-body");
+  var auditEmpty = document.getElementById("audit-empty");
 
   var liveAbort = null;
   var reconnectTimer = null;
@@ -199,6 +202,7 @@
     document.getElementById("stat-seq").textContent = String(data.last_seq);
     var pending = data.queue && typeof data.queue.pending === "number" ? data.queue.pending : 0;
     document.getElementById("stat-queue").textContent = String(pending);
+    document.getElementById("stat-jobs").textContent = String(data.pending_jobs != null ? data.pending_jobs : 0);
     var sinks = data.queue && data.queue.sinks ? data.queue.sinks : [];
     document.getElementById("stat-sinks").textContent = sinks.length ? sinks.join(", ") : "(none)";
     if (data.agents_persist_error) {
@@ -209,6 +213,54 @@
       agentsWarn.classList.add("hidden");
     }
     renderAgents(data.agents || []);
+  }
+
+  function enqueueJob(agentId, verb, args) {
+    return api("/api/v1/agents/" + encodeURIComponent(agentId) + "/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ verb: verb, args: args || {} }),
+    });
+  }
+
+  function refreshAudit() {
+    return api("/api/v1/jobs/audit").then(function (data) {
+      renderAudit((data && data.audit) || []);
+    }).catch(function (err) {
+      if (err.message !== "unauthorized") {
+        console.warn("audit refresh", err);
+      }
+    });
+  }
+
+  function renderAudit(entries) {
+    auditBody.textContent = "";
+    if (!entries.length) {
+      auditEmpty.classList.remove("hidden");
+      return;
+    }
+    auditEmpty.classList.add("hidden");
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var tr = document.createElement("tr");
+      var cells = [
+        fmtTime(e.at),
+        e.actor || "",
+        shortID(e.agent_id),
+        e.verb || "",
+        shortID(e.job_id),
+        e.detail || "",
+      ];
+      for (var k = 0; k < cells.length; k++) {
+        var td = document.createElement("td");
+        if (k === 2 || k === 4) td.className = "mono";
+        td.textContent = cells[k];
+        if (k === 2 && e.agent_id) td.title = e.agent_id;
+        if (k === 4 && e.job_id) td.title = e.job_id;
+        tr.appendChild(td);
+      }
+      auditBody.appendChild(tr);
+    }
   }
 
   function closeAgentDrawer() {
@@ -223,7 +275,7 @@
       ["id", a.id || ""],
       ["label", a.agent_label || ""],
       ["engagement", a.engagement || ""],
-      ["status", a.missing ? "missing" : "ok"],
+      ["status", a.missing ? "missing" : (a.acked ? "acked" : "ok")],
       ["os", a.os || ""],
       ["tier", a.tier || ""],
       ["watches", a.watch_count ? String(a.watch_count) : ""],
@@ -239,6 +291,41 @@
       dd.textContent = rows[i][1];
       drawerMeta.appendChild(dt);
       drawerMeta.appendChild(dd);
+    }
+    renderDrawerActions(a);
+  }
+
+  function renderDrawerActions(a) {
+    if (!drawerActions) return;
+    drawerActions.textContent = "";
+    if (!a || !a.id) return;
+    var actions = [
+      { label: "Reload config", verb: "reload_config" },
+      { label: "Status dump", verb: "status_dump" },
+      { label: "Ack missing", verb: "ack_missing", needMissing: true },
+    ];
+    for (var i = 0; i < actions.length; i++) {
+      (function (act) {
+        if (act.needMissing && !a.missing && !a.acked) return;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn ghost";
+        btn.textContent = act.label;
+        btn.addEventListener("click", function () {
+          btn.disabled = true;
+          enqueueJob(a.id, act.verb, {})
+            .then(function () {
+              return Promise.all([refreshStatus(), refreshAudit()]);
+            })
+            .catch(function (err) {
+              if (err.message !== "unauthorized") {
+                window.alert(act.label + " failed: " + err.message);
+              }
+            })
+            .then(function () { btn.disabled = false; });
+        });
+        drawerActions.appendChild(btn);
+      })(actions[i]);
     }
   }
 
@@ -333,7 +420,10 @@
           { text: a.agent_label || "" },
           { text: a.hostname || "(unknown)" },
           { text: a.engagement || "" },
-          { text: a.missing ? "missing" : "ok", pill: a.missing ? "bad" : "ok" },
+          {
+            text: a.missing ? "missing" : (a.acked ? "acked" : "ok"),
+            pill: a.missing ? "bad" : (a.acked ? "muted" : "ok"),
+          },
           { text: a.os || "" },
           { text: a.tier || "" },
           { text: a.watch_count ? String(a.watch_count) : "" },
@@ -358,6 +448,37 @@
           tr.appendChild(td);
         }
         var act = document.createElement("td");
+        act.className = "agent-actions";
+        function addJobBtn(label, verb, opts) {
+          opts = opts || {};
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn ghost";
+          b.textContent = label;
+          b.title = opts.title || label;
+          b.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            if (!a.id) return;
+            if (opts.confirm && !window.confirm(opts.confirm)) return;
+            b.disabled = true;
+            enqueueJob(a.id, verb, opts.args || {})
+              .then(function () {
+                return Promise.all([refreshStatus(), refreshAudit()]);
+              })
+              .catch(function (err) {
+                if (err.message !== "unauthorized") {
+                  window.alert(label + " failed: " + err.message);
+                }
+              })
+              .then(function () { b.disabled = false; });
+          });
+          act.appendChild(b);
+        }
+        addJobBtn("Reload", "reload_config", { title: "Queue reload_config (agent pull)" });
+        addJobBtn("Status", "status_dump", { title: "Queue status_dump" });
+        if (a.missing || a.acked) {
+          addJobBtn("Ack", "ack_missing", { title: "Acknowledge missing (hub-side)" });
+        }
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "btn ghost";
@@ -594,6 +715,7 @@
 
     statusTimer = setInterval(function () {
       refreshStatus().catch(function () { /* auth path surfaces logout */ });
+      refreshAudit();
     }, 5000);
 
     try {
@@ -635,6 +757,7 @@
     showConsole();
     await refreshStatus();
     await refreshTokens();
+    await refreshAudit();
     startLive();
   }
 
@@ -666,6 +789,10 @@
 
   document.getElementById("btn-refresh-tokens").addEventListener("click", function () {
     refreshTokens().catch(function () {});
+  });
+
+  document.getElementById("btn-refresh-audit").addEventListener("click", function () {
+    refreshAudit();
   });
 
   document.getElementById("drawer-close").addEventListener("click", closeAgentDrawer);

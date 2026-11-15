@@ -27,6 +27,7 @@ type agentView struct {
 	AgentLabel   string    `json:"agent_label,omitempty"`
 	LastSeen     time.Time `json:"last_seen"`
 	Missing      bool      `json:"missing"`
+	Acked        bool      `json:"acked,omitempty"` // operator ack_missing while still stale
 	Retired      bool      `json:"retired,omitempty"`
 	StaleAfter   string    `json:"stale_after,omitempty"`
 }
@@ -44,8 +45,10 @@ type agentRecord struct {
 	LastSeen        time.Time `json:"last_seen"`
 	Missing         bool      `json:"missing"`
 	MissingAlerted  bool      `json:"missing_alerted"`
+	OperatorAcked   bool      `json:"operator_acked,omitempty"`
 	RecoverPending  bool      `json:"recover_pending,omitempty"`
 	Retired         bool      `json:"retired,omitempty"`
+	alertClaimed    bool      // memory-only in-flight emit claim; not persisted / not recovery-visible
 }
 
 type agentTracker struct {
@@ -122,12 +125,18 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	// Pair agent_recovered with a prior missing alert, or retry a failed recover emit.
-	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending)
+	// Pair agent_recovered only after a durable missing alert (or recover retry).
+	// alertClaimed alone is not enough: the emit may still Abort if Append fails.
+	// If a heartbeat clears Missing during claim, MarkMissingAlerted arms RecoverPending.
+	wasMissing := !rec.Retired && (rec.RecoverPending ||
+		(rec.Missing && rec.MissingAlerted) ||
+		(rec.OperatorAcked && rec.MissingAlerted))
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
 	rec.MissingAlerted = false
+	rec.alertClaimed = false
+	rec.OperatorAcked = false
 	rec.RecoverPending = false
 	rec.Retired = false
 	if ev.Host != nil {
@@ -182,18 +191,23 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 			continue
 		}
 		if now.Sub(rec.LastSeen) < t.staleAfter {
-			if rec.Missing {
+			if rec.Missing || rec.OperatorAcked {
 				rec.Missing = false
 				rec.MissingAlerted = false
+				rec.OperatorAcked = false
 				changed = true
 			}
+			continue
+		}
+		// Operator ack suppresses further missing alerts until heartbeat returns.
+		if rec.OperatorAcked {
 			continue
 		}
 		if !rec.Missing {
 			rec.Missing = true
 			changed = true
 		}
-		if !rec.MissingAlerted {
+		if !rec.MissingAlerted && !rec.alertClaimed {
 			cp := *rec
 			out = append(out, &cp)
 		}
@@ -235,10 +249,49 @@ func (t *agentTracker) NeedsMissingAlert(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	return rec != nil && !rec.Retired && rec.Missing && !rec.MissingAlerted
+	return rec != nil && !rec.Retired && !rec.OperatorAcked && rec.Missing && !rec.MissingAlerted && !rec.alertClaimed
+}
+
+// ClaimMissingAlert atomically claims the right to emit agent_missing under one
+// lock (memory-only alertClaimed). Call MarkMissingAlerted after a durable emit;
+// AbortMissingAlert if the emit fails. alertClaimed is not persisted and does not
+// by itself trigger agent_recovered (Append may still fail).
+func (t *agentTracker) ClaimMissingAlert(id string) bool {
+	if t == nil || id == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired || rec.OperatorAcked || !rec.Missing || rec.MissingAlerted || rec.alertClaimed {
+		return false
+	}
+	rec.alertClaimed = true
+	return true
+}
+
+// AbortMissingAlert rolls back a ClaimMissingAlert when the durable emit failed.
+func (t *agentTracker) AbortMissingAlert(id string) {
+	if t == nil || id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil {
+		return
+	}
+	rec.alertClaimed = false
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
+// Caller invokes only after a successful chain append.
+// If Missing is still set: persist MissingAlerted.
+// If AckMissing raced the emit (OperatorAcked, Missing cleared): set MissingAlerted
+// so the next heartbeat pairs via OperatorAcked && MissingAlerted - do not arm
+// RecoverPending on a still-silent acked agent.
+// If a heartbeat cleared Missing mid-emit: arm RecoverPending only - no sticky
+// MissingAlerted that would suppress the next real missing cycle.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -246,15 +299,84 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	if rec == nil || !rec.Missing {
+	if rec == nil {
 		return
 	}
-	rec.MissingAlerted = true
+	rec.alertClaimed = false
+	switch {
+	case rec.Missing:
+		rec.MissingAlerted = true
+	case rec.OperatorAcked:
+		rec.MissingAlerted = true
+		rec.RecoverPending = false
+	default:
+		rec.RecoverPending = true
+		rec.MissingAlerted = false
+	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
 	} else {
 		t.lastErr = ""
 	}
+}
+
+// AckMissing clears a missing-agent flag after operator acknowledgement.
+// Does not retire the agent; a later heartbeat still updates LastSeen.
+func (t *agentTracker) AckMissing(id string) error {
+	if t == nil {
+		return fmt.Errorf("agent tracker disabled")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("invalid agent id")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil {
+		return fmt.Errorf("not found")
+	}
+	if rec.Retired {
+		return fmt.Errorf("retired")
+	}
+	now := time.Now().UTC()
+	stale := rec.Missing
+	if t.staleAfter > 0 && !rec.LastSeen.IsZero() {
+		stale = stale || now.Sub(rec.LastSeen) >= t.staleAfter
+	}
+	if !stale {
+		return fmt.Errorf("agent not missing")
+	}
+	// Keep MissingAlerted and alertClaimed as-is. MarkMissingAlerted (after a
+	// durable emit) sets MissingAlerted even when OperatorAcked; Abort only
+	// clears the memory claim so a failed emit cannot forge agent_recovered.
+	prevMissing, prevAcked, prevRecover := rec.Missing, rec.OperatorAcked, rec.RecoverPending
+	rec.Missing = false
+	rec.OperatorAcked = true
+	rec.RecoverPending = false
+	if err := t.persistLocked(); err != nil {
+		rec.Missing = prevMissing
+		rec.OperatorAcked = prevAcked
+		rec.RecoverPending = prevRecover
+		t.lastErr = err.Error()
+		return err
+	}
+	t.lastErr = ""
+	return nil
+}
+
+// KnownRecently reports whether id has heartbeated within within and is not retired.
+func (t *agentTracker) KnownRecently(id string, within time.Duration) bool {
+	if t == nil || id == "" || within <= 0 {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired || rec.LastSeen.IsZero() {
+		return false
+	}
+	return time.Since(rec.LastSeen) <= within
 }
 
 // Retire removes an agent from the active roster (reimaged / decommissioned hosts).
@@ -304,6 +426,10 @@ func (t *agentTracker) Snapshot() []agentView {
 		if t.staleAfter > 0 && !rec.LastSeen.IsZero() {
 			missing = now.Sub(rec.LastSeen) >= t.staleAfter
 		}
+		acked := rec.OperatorAcked
+		if acked {
+			missing = false
+		}
 		out = append(out, agentView{
 			ID:           rec.ID,
 			Hostname:     rec.Hostname,
@@ -316,6 +442,7 @@ func (t *agentTracker) Snapshot() []agentView {
 			AgentLabel:   rec.AgentLabel,
 			LastSeen:     rec.LastSeen,
 			Missing:      missing,
+			Acked:        acked,
 			StaleAfter:   stale,
 		})
 	}
@@ -409,9 +536,5 @@ func (t *agentTracker) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := t.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, t.path)
+	return writeFileAtomic(t.path, b)
 }

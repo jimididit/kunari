@@ -42,17 +42,22 @@ func (h *Hub) handleOperatorStatus(w http.ResponseWriter, r *http.Request) {
 		persistErr = h.agents.PersistError()
 	}
 	w.Header().Set("Content-Type", "application/json")
+	pendingJobs := 0
+	if h.jobs != nil {
+		pendingJobs = h.jobs.PendingCount()
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":              true,
-		"hits":            h.Hits(),
-		"alerts":          h.Alerts(),
-		"last_seq":        h.chain.LastSeq(),
-		"ingest":          len(h.ingestSecret) > 0,
-		"api":             len(h.apiToken) > 0,
-		"queue":           qs,
-		"agents":          agents,
+		"ok":                   true,
+		"hits":                 h.Hits(),
+		"alerts":               h.Alerts(),
+		"last_seq":             h.chain.LastSeq(),
+		"ingest":               len(h.ingestSecret) > 0,
+		"api":                  len(h.apiToken) > 0,
+		"queue":                qs,
+		"agents":               agents,
 		"agents_persist_error": persistErr,
-		"ts":              time.Now().UTC(),
+		"pending_jobs":         pendingJobs,
+		"ts":                   time.Now().UTC(),
 	})
 }
 
