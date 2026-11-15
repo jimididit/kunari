@@ -282,6 +282,7 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
+// Sets MissingAlerted even if AckMissing already cleared Missing, so recovery can pair.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -289,7 +290,7 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	if rec == nil || !rec.Missing {
+	if rec == nil {
 		return
 	}
 	rec.alertClaimed = false
@@ -328,9 +329,14 @@ func (t *agentTracker) AckMissing(id string) error {
 	if !stale {
 		return fmt.Errorf("agent not missing")
 	}
-	// Keep MissingAlerted as-is: only emit agent_recovered later if a missing
-	// alert was actually raised. Fresh OperatorAck without a prior alert must not forge recovery.
+	// Keep MissingAlerted as-is unless an in-flight claim exists: promote the claim
+	// so a concurrent durable emit still pairs with agent_recovered later.
 	prevMissing, prevAcked, prevRecover := rec.Missing, rec.OperatorAcked, rec.RecoverPending
+	prevAlerted, prevClaimed := rec.MissingAlerted, rec.alertClaimed
+	if rec.alertClaimed {
+		rec.MissingAlerted = true
+		rec.alertClaimed = false
+	}
 	rec.Missing = false
 	rec.OperatorAcked = true
 	rec.RecoverPending = false
@@ -338,6 +344,8 @@ func (t *agentTracker) AckMissing(id string) error {
 		rec.Missing = prevMissing
 		rec.OperatorAcked = prevAcked
 		rec.RecoverPending = prevRecover
+		rec.MissingAlerted = prevAlerted
+		rec.alertClaimed = prevClaimed
 		t.lastErr = err.Error()
 		return err
 	}

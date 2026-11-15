@@ -185,6 +185,35 @@ func TestJobStoreAckMissingEnqueueCompleted(t *testing.T) {
 	}
 }
 
+func TestJobSigSurvivesLineSeparatorArgs(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// U+2028 / U+2029 are always escaped by encoding/json.
+	raw := json.RawMessage("{\"note\":\"a\u2028b\u2029c\"}")
+	j, err := s.Enqueue("a", VerbSetTargets, "op", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	enc := json.NewEncoder(&wire)
+	enc.SetEscapeHTML(true)
+	if err := enc.Encode(map[string]any{"jobs": []Job{*j}}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("sig after U+2028 transport: %v args=%s", err, out.Jobs[0].Args)
+	}
+}
+
 func TestJobArgsNeverNullOnWire(t *testing.T) {
 	keys := testJobKeys(t)
 	s, err := newJobStore(t.TempDir(), keys)

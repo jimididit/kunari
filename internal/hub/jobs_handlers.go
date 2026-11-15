@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/jimididit/kunari/internal/sink"
 )
+
+type ingestBodyCtxKey struct{}
 
 const maxJobBody = 64 << 10 // 64 KiB
 
@@ -27,6 +30,19 @@ type jobResultRequest struct {
 type enqueueJobRequest struct {
 	Verb string          `json:"verb"`
 	Args json.RawMessage `json:"args,omitempty"`
+}
+
+// requireIngestHMACAuth verifies the shared ingest HMAC and attaches the body
+// for agent job pull/result handlers (mirrors requireAPIAuth at the route layer).
+func (h *Hub) requireIngestHMACAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, ok := h.requireIngestHMAC(w, r)
+		if !ok {
+			return
+		}
+		ctx := context.WithValue(r.Context(), ingestBodyCtxKey{}, body)
+		next(w, r.WithContext(ctx))
+	}
 }
 
 func (h *Hub) requireIngestHMAC(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
@@ -58,6 +74,11 @@ func (h *Hub) requireIngestHMAC(w http.ResponseWriter, r *http.Request) ([]byte,
 	return body, true
 }
 
+func ingestBodyFromCtx(r *http.Request) ([]byte, bool) {
+	body, ok := r.Context().Value(ingestBodyCtxKey{}).([]byte)
+	return body, ok
+}
+
 func (h *Hub) agentMayPullJobs(agentID string) bool {
 	// Fail closed when agent watch is off: otherwise any holder of the shared ingest
 	// secret could pull jobs for arbitrary agent_ids with no heartbeat gate.
@@ -69,8 +90,9 @@ func (h *Hub) agentMayPullJobs(agentID string) bool {
 }
 
 func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.requireIngestHMAC(w, r)
+	body, ok := ingestBodyFromCtx(r)
 	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var req jobPullRequest
@@ -102,8 +124,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.requireIngestHMAC(w, r)
+	body, ok := ingestBodyFromCtx(r)
 	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var req jobResultRequest
@@ -123,15 +146,6 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	// Hub-side side effects after successful agent completion.
-	if j.Status == jobStatusDone && j.Verb == VerbAckMissing && h.agents != nil {
-		h.agentMu.Lock()
-		err := h.agents.AckMissing(j.AgentID)
-		h.agentMu.Unlock()
-		if err != nil {
-			h.log.Info("ack_missing after result", "agent_id", j.AgentID, "err", err)
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": j})
 }

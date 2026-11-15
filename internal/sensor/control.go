@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,7 +196,10 @@ func canonicalJobArgs(args json.RawMessage) (json.RawMessage, error) {
 	if err := json.Compact(&buf, args); err != nil {
 		return nil, fmt.Errorf("args: %w", err)
 	}
-	return json.RawMessage(unescapeJobJSONHTML(buf.Bytes())), nil
+	b := unescapeJobJSONHTML(buf.Bytes())
+	b = bytes.ReplaceAll(b, []byte("\u2028"), []byte(`\u2028`))
+	b = bytes.ReplaceAll(b, []byte("\u2029"), []byte(`\u2029`))
+	return json.RawMessage(b), nil
 }
 
 func unescapeJobJSONHTML(b []byte) []byte {
@@ -238,6 +242,7 @@ func unescapeJobJSONHTML(b []byte) []byte {
 func jobSignPayload(id, agentID, verb string, args json.RawMessage, exp time.Time) ([]byte, error) {
 	sum := sha256.Sum256(args)
 	argsDigest := hex.EncodeToString(sum[:])
+	expMicro := strconv.FormatInt(exp.UTC().UnixMicro(), 10)
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
 		n := len(s)
@@ -250,7 +255,7 @@ func jobSignPayload(id, agentID, verb string, args json.RawMessage, exp time.Tim
 		buf.WriteString(s)
 		return nil
 	}
-	for _, s := range []string{"kunari.job/2", id, agentID, verb, argsDigest, exp.UTC().Format(time.RFC3339Nano)} {
+	for _, s := range []string{"kunari.job/3", id, agentID, verb, argsDigest, expMicro} {
 		if err := writeLP(s); err != nil {
 			return nil, err
 		}

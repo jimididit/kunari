@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -550,8 +551,12 @@ func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
 	if err := json.Compact(&buf, args); err != nil {
 		return nil, fmt.Errorf("args: %w", err)
 	}
-	// Compact HTML-escapes <>&; undo so signed bytes match agent verify after JSON transport.
-	return json.RawMessage(unescapeJSONHTML(buf.Bytes())), nil
+	// Compact HTML-escapes <>&; undo those. Force U+2028/U+2029 to \uXXXX so the
+	// sha256 digest matches after JSON transport (which always escapes them).
+	b := unescapeJSONHTML(buf.Bytes())
+	b = bytes.ReplaceAll(b, []byte("\u2028"), []byte(`\u2028`))
+	b = bytes.ReplaceAll(b, []byte("\u2029"), []byte(`\u2029`))
+	return json.RawMessage(b), nil
 }
 
 // unescapeJSONHTML reverses encoding/json's EscapeHTML substitutions.
@@ -597,8 +602,8 @@ func oddBackslashesBefore(s string, i int) bool {
 }
 
 // jobSignPayload builds a length-prefixed, unambiguous message for Ed25519.
-// Field order: domain, id, agent_id, verb, sha256hex(canonical args), expires_at (RFC3339Nano UTC).
-// Hashing args avoids JSON transport ambiguities (<>, &, U+2028/U+2029, empty/null).
+// Field order: domain, id, agent_id, verb, sha256hex(canonical args), expires_unix_micro.
+// Args are hashed and expiry is unix-micro so JSON time/string transport cannot break verify.
 func jobSignPayload(j *Job) ([]byte, error) {
 	args, err := canonicalJSONArgs(j.Args)
 	if err != nil {
@@ -606,7 +611,7 @@ func jobSignPayload(j *Job) ([]byte, error) {
 	}
 	sum := sha256.Sum256(args)
 	argsDigest := hex.EncodeToString(sum[:])
-	exp := j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	exp := strconv.FormatInt(j.ExpiresAt.UTC().UnixMicro(), 10)
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
 		n := len(s)
@@ -619,7 +624,7 @@ func jobSignPayload(j *Job) ([]byte, error) {
 		buf.WriteString(s)
 		return nil
 	}
-	for _, s := range []string{"kunari.job/2", j.ID, j.AgentID, j.Verb, argsDigest, exp} {
+	for _, s := range []string{"kunari.job/3", j.ID, j.AgentID, j.Verb, argsDigest, exp} {
 		if err := writeLP(s); err != nil {
 			return nil, err
 		}
