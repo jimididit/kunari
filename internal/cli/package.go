@@ -29,6 +29,9 @@ func newPackageAgentCmd() *cobra.Command {
 		prefix        string
 		binaryName    string
 		unitName      string
+		engagement    string
+		agentLabel    string
+		hubRegistry   string
 	)
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -53,6 +56,9 @@ func newPackageAgentCmd() *cobra.Command {
 				InstallPrefix: prefix,
 				BinaryName:    binaryName,
 				UnitName:      unitName,
+				Engagement:    engagement,
+				AgentLabel:    agentLabel,
+				HubRegistry:   hubRegistry,
 			}); err != nil {
 				return err
 			}
@@ -71,6 +77,9 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&prefix, "prefix", "", "install prefix override (optional; safe absolute path only)")
 	cmd.Flags().StringVar(&binaryName, "binary-name", "", "installed binary basename (default kunari / kunari.exe; OS-name deny-list)")
 	cmd.Flags().StringVar(&unitName, "unit-name", "", "persistence name: systemd unit, launchd label, or Windows task (defaults kunari-*)")
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement id/name written into sentinel.json")
+	cmd.Flags().StringVar(&agentLabel, "agent-label", "", "operator label written into sentinel.json / heartbeats")
+	cmd.Flags().StringVar(&hubRegistry, "hub-registry", "", "hub registry.db path; imports sibling forge manifest after packaging")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("out")
 	_ = cmd.MarkFlagRequired("artifact")

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -96,15 +97,30 @@ func (s *Store) Revoke(tokenID string) error {
 }
 
 func (s *Store) ExistsActive(tokenID string) (bool, error) {
-	var revoked int
-	err := s.db.QueryRow(`SELECT revoked FROM tokens WHERE token_id=?`, tokenID).Scan(&revoked)
+	m, err := s.Get(tokenID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return revoked == 0, nil
+	if m.Revoked || m.Expired(time.Now().UTC()) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// Import verifies a signed manifest (unless already revoked) and upserts it.
+func (s *Store) Import(m *Manifest) error {
+	if m == nil || strings.TrimSpace(m.TokenID) == "" {
+		return fmt.Errorf("manifest token_id required")
+	}
+	if !m.Revoked {
+		if err := m.Verify(); err != nil {
+			return fmt.Errorf("manifest verify: %w", err)
+		}
+	}
+	return s.Put(m)
 }
 
 func boolToInt(b bool) int {

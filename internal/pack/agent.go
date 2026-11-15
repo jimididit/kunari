@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jimididit/kunari/internal/registry"
 	"github.com/jimididit/kunari/internal/safepath"
 	"github.com/jimididit/kunari/internal/sensor"
 )
@@ -23,6 +24,9 @@ type AgentOptions struct {
 	InstallPrefix string // optional override of default install root
 	BinaryName    string // optional; default kunari / kunari.exe
 	UnitName      string // optional; systemd unit / launchd label / Windows task name
+	Engagement    string
+	AgentLabel    string
+	HubRegistry   string // optional hub registry.db; imports sibling manifest when set
 }
 
 // BuildAgent writes an authorized-use agent package under OutDir.
@@ -96,6 +100,19 @@ func BuildAgent(opts AgentOptions) error {
 		return fmt.Errorf("copy hub ingest file: %w", err)
 	}
 
+	engagement := strings.TrimSpace(opts.Engagement)
+	agentLabel := strings.TrimSpace(opts.AgentLabel)
+	if engagement == "" || agentLabel == "" {
+		if m := loadSiblingManifest(art); m != nil {
+			if engagement == "" {
+				engagement = strings.TrimSpace(m.Engagement)
+			}
+			if agentLabel == "" {
+				agentLabel = strings.TrimSpace(m.AgentLabel)
+			}
+		}
+	}
+
 	cfgPath := filepath.Join(out, "etc", "sentinel.json")
 	cfg := sensor.Config{
 		Targets: []sensor.Target{{
@@ -108,6 +125,8 @@ func BuildAgent(opts AgentOptions) error {
 		DataDir:        targetJoin(goos, prefix, "data"),
 		KeyPath:        targetJoin(goos, prefix, "data", "signing.key"),
 		AgentVersion:   "0.5.1",
+		Engagement:     engagement,
+		AgentLabel:     agentLabel,
 		HubURL:         strings.TrimRight(opts.HubURL, "/"),
 		HubSecretFile:  targetJoin(goos, prefix, "etc", "ingest.secret"),
 	}
@@ -155,7 +174,58 @@ func BuildAgent(opts AgentOptions) error {
 			return err
 		}
 	}
+
+	if regPath := strings.TrimSpace(opts.HubRegistry); regPath != "" {
+		manPath := siblingManifestPath(art)
+		if manPath == "" {
+			return fmt.Errorf("--hub-registry set but no sibling *.manifest.json next to artifact")
+		}
+		st, err := registry.Open(regPath)
+		if err != nil {
+			return fmt.Errorf("hub registry: %w", err)
+		}
+		defer st.Close()
+		if _, err := st.ImportFile(manPath); err != nil {
+			return fmt.Errorf("import manifest into hub registry: %w", err)
+		}
+	}
 	return nil
+}
+
+func loadSiblingManifest(artifactPath string) *registry.Manifest {
+	manPath := siblingManifestPath(artifactPath)
+	if manPath == "" {
+		return nil
+	}
+	b, err := os.ReadFile(manPath) // #nosec G304 -- sibling of cleaned artifact
+	if err != nil {
+		return nil
+	}
+	var m registry.Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	return &m
+}
+
+func siblingManifestPath(artifactPath string) string {
+	dir := filepath.Dir(artifactPath)
+	stem := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
+	candidates := []string{
+		filepath.Join(dir, stem+".manifest.json"),
+	}
+	for _, suf := range []string{"-folder", "-stubs"} {
+		if strings.HasSuffix(stem, suf) {
+			base := strings.TrimSuffix(stem, suf)
+			candidates = append(candidates, filepath.Join(dir, base+".manifest.json"))
+		}
+	}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 // writeInstallScript writes a shell installer as 0600 then marks it owner-executable.

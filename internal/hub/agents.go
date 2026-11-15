@@ -21,6 +21,8 @@ type agentView struct {
 	OS           string    `json:"os,omitempty"`
 	Tier         string    `json:"tier,omitempty"`
 	AgentVersion string    `json:"agent_version,omitempty"`
+	Engagement   string    `json:"engagement,omitempty"`
+	AgentLabel   string    `json:"agent_label,omitempty"`
 	LastSeen     time.Time `json:"last_seen"`
 	Missing      bool      `json:"missing"`
 	Retired      bool      `json:"retired,omitempty"`
@@ -28,16 +30,18 @@ type agentView struct {
 }
 
 type agentRecord struct {
-	ID             string    `json:"id"`
-	Hostname       string    `json:"hostname,omitempty"`
-	OS             string    `json:"os,omitempty"`
-	Tier           string    `json:"tier,omitempty"`
-	AgentVersion   string    `json:"agent_version,omitempty"`
-	LastSeen       time.Time `json:"last_seen"`
-	Missing         bool `json:"missing"`
-	MissingAlerted  bool `json:"missing_alerted"`
-	RecoverPending  bool `json:"recover_pending,omitempty"`
-	Retired         bool `json:"retired,omitempty"`
+	ID              string    `json:"id"`
+	Hostname        string    `json:"hostname,omitempty"`
+	OS              string    `json:"os,omitempty"`
+	Tier            string    `json:"tier,omitempty"`
+	AgentVersion    string    `json:"agent_version,omitempty"`
+	Engagement      string    `json:"engagement,omitempty"`
+	AgentLabel      string    `json:"agent_label,omitempty"`
+	LastSeen        time.Time `json:"last_seen"`
+	Missing         bool      `json:"missing"`
+	MissingAlerted  bool      `json:"missing_alerted"`
+	RecoverPending  bool      `json:"recover_pending,omitempty"`
+	Retired         bool      `json:"retired,omitempty"`
 }
 
 type agentTracker struct {
@@ -131,6 +135,12 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		}
 		if ev.Host.AgentVersion != "" {
 			rec.AgentVersion = ev.Host.AgentVersion
+		}
+		if ev.Host.Engagement != "" {
+			rec.Engagement = ev.Host.Engagement
+		}
+		if ev.Host.AgentLabel != "" {
+			rec.AgentLabel = ev.Host.AgentLabel
 		}
 	}
 	if ev.DetectionTier != "" {
@@ -287,12 +297,22 @@ func (t *agentTracker) Snapshot() []agentView {
 			OS:           rec.OS,
 			Tier:         rec.Tier,
 			AgentVersion: rec.AgentVersion,
+			Engagement:   rec.Engagement,
+			AgentLabel:   rec.AgentLabel,
 			LastSeen:     rec.LastSeen,
 			Missing:      missing,
 			StaleAfter:   stale,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
+		ei, ej := out[i].Engagement, out[j].Engagement
+		if ei != ej {
+			return ei < ej
+		}
+		li, lj := out[i].AgentLabel, out[j].AgentLabel
+		if li != lj {
+			return li < lj
+		}
 		hi, hj := out[i].Hostname, out[j].Hostname
 		if hi != hj {
 			return hi < hj

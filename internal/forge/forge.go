@@ -112,6 +112,8 @@ func Run(opt Options) (*Result, error) {
 		BeaconDNS:      dnsName,
 		CreatedAt:      time.Now().UTC(),
 		Tags:           opt.Tags,
+		Engagement:     strings.TrimSpace(opt.Engagement),
+		AgentLabel:     strings.TrimSpace(opt.AgentLabel),
 	}
 	if opt.Expire > 0 {
 		exp := m.CreatedAt.Add(opt.Expire)
@@ -292,7 +294,11 @@ func renderInstall(m *registry.Manifest, filename, dirName string) string {
 			b.WriteString("Folder browse without a sentinel usually will not alert; prefer `--detect both` and watch `secrets.env`.\n")
 		}
 	}
-	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) + "`\n")
+	b.WriteString("\n## Registry\n\nImport into the hub collector registry after forge:\n\n")
+	b.WriteString("```\nkunari import --manifest " + shellQuote(sanitizeName(m.Name)+".manifest.json") +
+		" --registry ./data/registry.db\n```\n")
+	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) +
+		" --registry ./data/registry.db` (hub UI revoke also works)\n")
 	return b.String()
 }
 

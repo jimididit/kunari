@@ -3,25 +3,24 @@ package pack
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/jimididit/kunari/internal/registry"
 	"github.com/jimididit/kunari/internal/safepath"
 )
 
-// detectFromSiblingManifest reads detect from <artifact-stem>.manifest.json when present.
+// detectFromSiblingManifest reads detect from a sibling *.manifest.json when present.
+// Handles forged names like name-folder.zip / name-stubs.zip mapping to name.manifest.json.
 func detectFromSiblingManifest(artifactPath string) string {
 	artifactPath, err := safepath.Clean(artifactPath)
 	if err != nil {
 		return ""
 	}
-	stem := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
-	if stem == "" || stem == "." {
+	manPath := siblingManifestPath(artifactPath)
+	if manPath == "" {
 		return ""
 	}
-	manPath := filepath.Join(filepath.Dir(artifactPath), stem+".manifest.json")
-	b, err := os.ReadFile(manPath) // #nosec G304 -- path derived from cleaned artifact dir + fixed suffix
+	b, err := os.ReadFile(manPath) // #nosec G304 -- path from siblingManifestPath under cleaned artifact dir
 	if err != nil {
 		return ""
 	}

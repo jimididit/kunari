@@ -19,6 +19,8 @@ type Options struct {
 	AuthzRef    string
 	Expire      time.Duration
 	Tags        map[string]string
+	Engagement  string
+	AgentLabel  string
 	OutDir      string
 	RegistryDB  string
 	KeyPath     string

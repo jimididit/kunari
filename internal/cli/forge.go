@@ -23,6 +23,8 @@ func newForgeCmd() *cobra.Command {
 		authz        string
 		expire       string
 		tags         []string
+		engagement   string
+		agentLabel   string
 		out          string
 		registryDB   string
 		keyPath      string
@@ -66,6 +68,8 @@ func newForgeCmd() *cobra.Command {
 				AuthzRef:     authz,
 				Expire:       exp,
 				Tags:         forge.ParseTags(tags),
+				Engagement:   engagement,
+				AgentLabel:   agentLabel,
 				OutDir:       out,
 				RegistryDB:   registryDB,
 				KeyPath:      keyPath,
@@ -97,8 +101,10 @@ func newForgeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&authz, "authz-ref", "", "authorization / ticket reference (required)")
 	cmd.Flags().StringVar(&expire, "expire", "", "optional expiry (e.g. 90d, 2160h)")
 	cmd.Flags().StringArrayVar(&tags, "tags", nil, "k:v tags (repeatable)")
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement id/name stamped on the manifest")
+	cmd.Flags().StringVar(&agentLabel, "agent-label", "", "optional operator label for the endpoint agent")
 	cmd.Flags().StringVar(&out, "out", "./dist", "output directory")
-	cmd.Flags().StringVar(&registryDB, "registry", "kunari-registry.db", "local registry sqlite path")
+	cmd.Flags().StringVar(&registryDB, "registry", "kunari-registry.db", "registry sqlite path (use hub data/registry.db so the collector sees the token)")
 	cmd.Flags().StringVar(&keyPath, "key", "kunari-signing.key", "ed25519 signing key path (created if missing)")
 	_ = cmd.MarkFlagRequired("type")
 	_ = cmd.MarkFlagRequired("name")

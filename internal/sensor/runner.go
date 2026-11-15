@@ -260,6 +260,8 @@ func (r *Runner) hostInfo() *event.HostInfo {
 		Hostname:     hn,
 		OS:           runtime.GOOS,
 		AgentVersion: r.Cfg.AgentVersion,
+		Engagement:   r.Cfg.Engagement,
+		AgentLabel:   r.Cfg.AgentLabel,
 	}
 }
 
