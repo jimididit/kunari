@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -69,6 +70,41 @@ func TestJobStoreCanonicalArgsSig(t *testing.T) {
 	}
 	if err := VerifyJobSig(keys.Public, j); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestJobSigSurvivesHTMLCharsAndJSONTransport(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := json.RawMessage(`{"url":"https://ex.com?a=1&b=2","note":"<hint>"}`)
+	j, err := s.Enqueue("a", VerbSetTargets, "op", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(j.Args, []byte(`\u0026`)) || bytes.Contains(j.Args, []byte(`\u003c`)) {
+		t.Fatalf("canonical args still HTML-escaped: %s", j.Args)
+	}
+	// Simulate default encoding/json EscapeHTML=true transport, then agent decode.
+	var wire bytes.Buffer
+	enc := json.NewEncoder(&wire)
+	enc.SetEscapeHTML(true)
+	if err := enc.Encode(map[string]any{"jobs": []Job{*j}}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Jobs) != 1 {
+		t.Fatalf("jobs: %d", len(out.Jobs))
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("sig after HTML transport: %v\nargs=%s", err, out.Jobs[0].Args)
 	}
 }
 
@@ -162,7 +198,8 @@ func TestJobStoreTrimAuditIndependent(t *testing.T) {
 }
 
 func TestAgentTrackerAckMissing(t *testing.T) {
-	tr, err := newAgentTracker(t.TempDir(), 100*time.Millisecond)
+	dir := t.TempDir()
+	tr, err := newAgentTracker(dir, 100*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +212,23 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	}
 	if tr.ClaimMissingAlert("ack-agent") {
 		t.Fatal("double claim must fail")
+	}
+	// Claim is memory-only: reload must allow retry until MarkMissingAlerted persists.
+	tr2, err := newAgentTracker(dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tr2.CheckMissing(time.Now().UTC().Add(200 * time.Millisecond))
+	if !tr2.ClaimMissingAlert("ack-agent") {
+		t.Fatal("claim must be retryable after crash before mark")
+	}
+	tr2.MarkMissingAlerted("ack-agent")
+	tr3, err := newAgentTracker(dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr3.ClaimMissingAlert("ack-agent") {
+		t.Fatal("marked alert must survive reload")
 	}
 	if err := tr.AckMissing("ack-agent"); err != nil {
 		t.Fatal(err)

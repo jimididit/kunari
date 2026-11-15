@@ -467,7 +467,19 @@ func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
 	if err := json.Compact(&buf, args); err != nil {
 		return nil, fmt.Errorf("args: %w", err)
 	}
-	return json.RawMessage(buf.Bytes()), nil
+	// Compact HTML-escapes <>&; undo so signed bytes match agent verify after JSON transport.
+	return json.RawMessage(unescapeJSONHTML(buf.Bytes())), nil
+}
+
+// unescapeJSONHTML reverses encoding/json's EscapeHTML substitutions.
+func unescapeJSONHTML(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`\u00`)) {
+		return b
+	}
+	b = bytes.ReplaceAll(b, []byte(`\u003c`), []byte(`<`))
+	b = bytes.ReplaceAll(b, []byte(`\u003e`), []byte(`>`))
+	b = bytes.ReplaceAll(b, []byte(`\u0026`), []byte(`&`))
+	return b
 }
 
 // jobSignPayload builds a length-prefixed, unambiguous message for Ed25519.

@@ -247,6 +247,8 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 			h.agents.AbortMissingAlert(rec.ID)
 			continue
 		}
+		// Persist alerted only after durable chain append so a crash mid-emit retries.
+		h.agents.MarkMissingAlerted(rec.ID)
 		h.subs.Broadcast(ev)
 		if err := h.queue.Enqueue(ev); err != nil {
 			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)

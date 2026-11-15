@@ -163,11 +163,11 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, args); err != nil {
-		return fmt.Errorf("args: %w", err)
+	compacted, err := canonicalJobArgs(args)
+	if err != nil {
+		return err
 	}
-	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, compact.String(), j.ExpiresAt)
+	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, string(compacted), j.ExpiresAt)
 	if err != nil {
 		return err
 	}
@@ -180,6 +180,26 @@ func (r *Runner) verifyJob(j *controlJob) error {
 		return fmt.Errorf("signature mismatch")
 	}
 	return nil
+}
+
+func canonicalJobArgs(args json.RawMessage) (json.RawMessage, error) {
+	if len(args) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	if !json.Valid(args) {
+		return nil, fmt.Errorf("args must be json")
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, args); err != nil {
+		return nil, fmt.Errorf("args: %w", err)
+	}
+	b := buf.Bytes()
+	if bytes.Contains(b, []byte(`\u00`)) {
+		b = bytes.ReplaceAll(b, []byte(`\u003c`), []byte(`<`))
+		b = bytes.ReplaceAll(b, []byte(`\u003e`), []byte(`>`))
+		b = bytes.ReplaceAll(b, []byte(`\u0026`), []byte(`&`))
+	}
+	return json.RawMessage(b), nil
 }
 
 func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, error) {

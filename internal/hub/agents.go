@@ -248,8 +248,9 @@ func (t *agentTracker) NeedsMissingAlert(id string) bool {
 }
 
 // ClaimMissingAlert atomically claims the right to emit agent_missing under one
-// lock (sets MissingAlerted). Call AbortMissingAlert if the emit fails so the
-// next watch tick can retry. AckMissing cannot interleave between check and mark.
+// lock (sets MissingAlerted in memory only). Call MarkMissingAlerted after a
+// durable emit so a crash before emit can still retry; AbortMissingAlert if the
+// emit fails. AckMissing cannot interleave between check and mark while agentMu held.
 func (t *agentTracker) ClaimMissingAlert(id string) bool {
 	if t == nil || id == "" {
 		return false
@@ -261,12 +262,6 @@ func (t *agentTracker) ClaimMissingAlert(id string) bool {
 		return false
 	}
 	rec.MissingAlerted = true
-	if err := t.persistLocked(); err != nil {
-		t.lastErr = err.Error()
-		rec.MissingAlerted = false
-		return false
-	}
-	t.lastErr = ""
 	return true
 }
 

@@ -90,8 +90,15 @@ func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
 	if jobs == nil {
 		jobs = []Job{}
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
+	w.WriteHeader(status)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
 }
 
 func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
@@ -126,8 +133,7 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 			h.log.Info("ack_missing after result", "agent_id", j.AgentID, "err", err)
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "job": j})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": j})
 }
 
 func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
@@ -176,9 +182,7 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		}
 		j = done
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "job": j})
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "job": j})
 }
 
 func (h *Hub) handleListAgentJobs(w http.ResponseWriter, r *http.Request) {
@@ -191,8 +195,7 @@ func (h *Hub) handleListAgentJobs(w http.ResponseWriter, r *http.Request) {
 	if jobs == nil {
 		jobs = []Job{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"jobs": jobs, "count": len(jobs)})
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "count": len(jobs)})
 }
 
 func (h *Hub) handleJobsAudit(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +207,5 @@ func (h *Hub) handleJobsAudit(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []AuditEntry{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"audit": entries, "count": len(entries)})
+	writeJSON(w, http.StatusOK, map[string]any{"audit": entries, "count": len(entries)})
 }
