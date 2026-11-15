@@ -273,25 +273,23 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 	for _, needle := range []string{
 		"$VisibleUnder = 'Work\\Finance'",
 		"FileSystemAuditRule",
-		"auditpol /set /subcategory:\"File System\"",
 		"ConvertFrom-Json",
 		"Documents",
 		"Assert-NoReparse",
 		"Install-VisibleDecoy",
-		"Lock-VisibleDir",
-		"Grant-VisibleUserRead",
-		"Unlock-VisibleTree",
+		"Invoke-AsInteractiveUser",
+		"Apply-VisibleSACL",
 		"Resolve-InteractiveProfile",
-		"takeown",
-		"/inheritance:e",
 		"UTF8Encoding",
-		"/remove:g",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
 	}
-	if strings.Contains(body, "Set-Content -LiteralPath $cfgTmp -Encoding utf8") || strings.Contains(body, "Set-Content -LiteralPath $cfgPath -Encoding utf8") {
+	if strings.Contains(body, "Lock-VisibleDir") || strings.Contains(body, "takeown") {
+		t.Fatal("windows visible install must not takeown/lock user Documents as SYSTEM")
+	}
+	if strings.Contains(body, "Set-Content -LiteralPath $cfgPath -Encoding utf8") {
 		t.Fatal("windows install must write sentinel.json without a UTF-8 BOM")
 	}
 	if strings.Contains(body, `Join-Path 'C:\\Users' $userSam`) || strings.Contains(body, `Join-Path 'C:\Users' $userSam`) {
@@ -339,10 +337,18 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"grant_group_read_path",
 		"SupplementaryGroups=",
 		"run_as_user",
+		"jq is required",
+		"printf '%s'",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.sh missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "printf '%%s'") {
+		t.Fatal("install.sh must not emit literal percent-percent-s from Go escaping mistake")
+	}
+	if strings.Contains(body, "sed \"s|") {
+		t.Fatal("linux visible install must not use sed to patch sentinel.json")
 	}
 	if strings.Contains(body, "setfacl -") || strings.Contains(body, "command -v setfacl") {
 		t.Fatal("linux visible install must not invoke setfacl on user paths")

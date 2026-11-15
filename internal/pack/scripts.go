@@ -377,31 +377,17 @@ if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
   $userProfile = Resolve-InteractiveProfile $console
   $docsRoot = Join-Path $userProfile 'Documents'
-  $VisibleDir = $null
-  $WatchPath = $null
-  try {
-    $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
-    $WatchPath = Join-Path $VisibleDir $DecoyBase
-    Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console $docsRoot
-    # Restore Documents + intermediate dirs; decoy file stays user-readable only.
-    Grant-VisibleUserRead $docsRoot $VisibleUnder $WatchPath $console
-    $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
-    $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
-    $cfg.targets[0].path = $WatchPath
-    # UTF-8 without BOM (Windows PowerShell's utf8 encoding writes a BOM).
-    $utf8 = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)
-    # Enable object-access auditing and attach SACL so win-sacl-4663 sees open/read.
-    $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
-    $acl = Get-Acl -Path $WatchPath -Audit
-    $rule = New-Object System.Security.AccessControl.FileSystemAuditRule(
-      'Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success')
-    $acl.AddAuditRule($rule)
-    Set-Acl -Path $WatchPath -AclObject $acl
-  } catch {
-    try { Unlock-VisibleTree $docsRoot $VisibleUnder $WatchPath $console } catch {}
-    throw
-  }
+  # Create/copy as the interactive user (no SYSTEM ACL lock races in Documents).
+  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
+  $WatchPath = Join-Path $VisibleDir $DecoyBase
+  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
+  $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
+  $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+  $cfg.targets[0].path = $WatchPath
+  # UTF-8 without BOM (Windows PowerShell's utf8 encoding writes a BOM).
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)
+  Apply-VisibleSACL $WatchPath
 }
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)

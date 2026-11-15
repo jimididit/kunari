@@ -1,10 +1,12 @@
 package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
-// Visible decoys are created/copied as the interactive user (no root chown/mv/setfacl
-// into a user-writable tree). Linux grants the service access via the owner's group +
-// systemd SupplementaryGroups. sentinel.json is patched with jq or sed.
+// Visible decoys are created/copied as the interactive user (no root write into a
+// user-writable tree). Linux grants service access via the owner's group +
+// systemd SupplementaryGroups. sentinel.json patches require jq.
 func unixVisibleShellHelpers() string {
+	// NOTE: this string is inserted via fmt %s and is NOT re-parsed as a format
+	// string, so keep single "%" for shell printf/stat formats.
 	return `
 refuse_if_symlink() {
   local p="$1"
@@ -60,7 +62,7 @@ ensure_visible_dir() {
       refuse_if_symlink "$cur"
     fi
   done
-  printf '%%s' "$cur"
+  printf '%s' "$cur"
 }
 
 # Copy decoy as the interactive user (no root write into the user tree).
@@ -144,7 +146,6 @@ safe_rm_visible_file() {
     fi
   done
   if [[ -f "$cur" ]]; then
-    # Delete as the owner so a swapped symlink cannot redirect a root rm.
     run_as_user "$owner" rm -f -- "$cur"
     return 0
   fi
@@ -153,47 +154,37 @@ safe_rm_visible_file() {
   fi
 }
 
-# Replace packaged __KUNARI_VISIBLE__ placeholder with the real watch path.
-# Writes through the existing inode when possible so ownership/mode stay intact.
+# Replace packaged __KUNARI_VISIBLE__ placeholder with the real watch path (jq required).
 patch_sentinel_watch() {
   local cfg="$1"
   local watch="$2"
   local placeholder="$3"
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "error: jq is required to patch sentinel.json for --visible-under" >&2
+    exit 1
+  fi
   local tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/kunari-sentinel.XXXXXX")"
-  if command -v jq >/dev/null 2>&1; then
-    if ! jq --arg p "$watch" '.targets[0].path = $p' "$cfg" >"$tmp"; then
-      rm -f "$tmp"
-      echo "error: jq failed patching sentinel.json" >&2
-      exit 1
-    fi
-  else
-    local esc="$watch"
-    esc="${esc//\\/\\\\}"
-    esc="${esc//\"/\\\"}"
-    # shellcheck disable=SC2001
-    if ! sed "s|${placeholder}|${esc}|g" "$cfg" >"$tmp"; then
-      rm -f "$tmp"
-      echo "error: sed failed patching sentinel.json" >&2
-      exit 1
-    fi
+  if ! jq --arg p "$watch" '.targets[0].path = $p' "$cfg" >"$tmp"; then
+    rm -f "$tmp"
+    echo "error: jq failed patching sentinel.json" >&2
+    exit 1
   fi
   if [[ ! -s "$tmp" ]] || ! grep -Fq "$watch" "$tmp"; then
     rm -f "$tmp"
-    echo "error: failed to patch sentinel.json watch path (install jq for reliable JSON edits)" >&2
+    echo "error: failed to patch sentinel.json watch path" >&2
     exit 1
   fi
-  if [[ -f "$cfg" ]]; then
-    cat "$tmp" >"$cfg"
-    rm -f "$tmp"
-  else
-    mv "$tmp" "$cfg"
-  fi
+  # Keep ownership/mode by writing through the existing inode.
+  cat "$tmp" >"$cfg"
+  rm -f "$tmp"
 }
 `
 }
 
 // windowsVisiblePSHelpers is embedded into Windows install/uninstall scripts.
+// Visible decoy create/copy/delete runs as the interactive user via a one-shot
+// scheduled task so SYSTEM never write-races through a user-writable tree.
 func windowsVisiblePSHelpers() string {
 	return `
 function Assert-NoReparse([string]$Path) {
@@ -220,124 +211,97 @@ function Resolve-InteractiveProfile([string]$ConsoleUser) {
   Assert-NoReparse $userProfile
   return $userProfile
 }
-function Lock-VisibleDir([string]$Dir, [string]$User) {
-  Assert-NoReparse $Dir
-  # Take ownership so an unprivileged folder owner cannot re-grant themselves write mid-copy.
-  $null = cmd.exe /c ('takeown /F "{0}" /A >nul' -f $Dir)
-  $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Dir)
-  if (-not [string]::IsNullOrWhiteSpace($User)) {
-    $null = cmd.exe /c ('icacls "{0}" /remove:g "{1}" >nul' -f $Dir, $User)
+function Invoke-AsInteractiveUser([string]$User, [string]$ScriptBody) {
+  $tmpPs1 = Join-Path $env:TEMP ('kunari-vis-' + [guid]::NewGuid().ToString('N') + '.ps1')
+  $taskName = 'KunariVisible-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($tmpPs1, $ScriptBody, $utf8)
+  try {
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $tmpPs1 + '"')
+    $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+    $deadline = (Get-Date).AddSeconds(60)
+    do {
+      Start-Sleep -Milliseconds 200
+      $info = Get-ScheduledTaskInfo -TaskName $taskName
+    } while ($info.LastTaskResult -eq 267009 -and (Get-Date) -lt $deadline)
+    $info = Get-ScheduledTaskInfo -TaskName $taskName
+    if ($info.LastTaskResult -ne 0) {
+      throw ("interactive user task failed with code {0}" -f $info.LastTaskResult)
+    }
+  } finally {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpPs1 -Force -ErrorAction SilentlyContinue
   }
-  foreach ($acct in @('Users', 'Authenticated Users', 'Everyone')) {
-    $null = cmd.exe /c ('icacls "{0}" /remove:g "{1}" >nul' -f $Dir, $acct)
-  }
-  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Dir)
-  Assert-NoReparse $Dir
 }
 function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel, [string]$User) {
-  if (-not (Test-Path -LiteralPath $DocumentsRoot)) {
-    New-Item -ItemType Directory -Force -Path $DocumentsRoot | Out-Null
-  }
-  # Lock Documents before creating children so the tree cannot be junction-swapped mid-create.
-  Lock-VisibleDir $DocumentsRoot $User
   Assert-NoReparse $DocumentsRoot
-  $cur = $DocumentsRoot
-  foreach ($part in ($Rel -split '[\\/]+')) {
-    if ([string]::IsNullOrWhiteSpace($part)) { continue }
-    $cur = Join-Path $cur $part
-    if (Test-Path -LiteralPath $cur) {
-      Assert-NoReparse $cur
-      $it = Get-Item -LiteralPath $cur -Force
-      if (-not $it.PSIsContainer) { throw ("not a directory: {0}" -f $cur) }
-      Lock-VisibleDir $cur $User
-    } else {
-      New-Item -ItemType Directory -Force -Path $cur | Out-Null
-      Assert-NoReparse $cur
-      Lock-VisibleDir $cur $User
-    }
-  }
-  return $cur
-}
-function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User, [string]$DocumentsRoot) {
-  $dir = Split-Path -Parent $Dest
-  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
-    Lock-VisibleDir $DocumentsRoot $User
-  }
-  Lock-VisibleDir $dir $User
-  if (Test-Path -LiteralPath $Dest) {
-    Assert-NoReparse $Dest
-    $existing = Get-Item -LiteralPath $Dest -Force
-    if ($existing.PSIsContainer) { throw ("visible decoy path is a directory: {0}" -f $Dest) }
-    Remove-Item -LiteralPath $Dest -Force
-  }
+  $dir = Join-Path $DocumentsRoot (($Rel -replace '/', '\'))
+  $dirLit = $dir.Replace("'", "''")
+  $scriptBody = @(
+    '$ErrorActionPreference = ''Stop'''
+    ('New-Item -ItemType Directory -Force -Path ''{0}'' | Out-Null' -f $dirLit)
+  ) -join [Environment]::NewLine
+  Invoke-AsInteractiveUser $User $scriptBody
+  Assert-NoReparse $DocumentsRoot
   Assert-NoReparse $dir
-  Copy-Item -LiteralPath $Src -Destination $Dest -Force
+  if (-not (Test-Path -LiteralPath $dir)) {
+    throw ("visible directory was not created: {0}" -f $dir)
+  }
+  return $dir
+}
+function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User) {
+  $dir = Split-Path -Parent $Dest
+  Assert-NoReparse $dir
+  $srcLit = $Src.Replace("'", "''")
+  $destLit = $Dest.Replace("'", "''")
+  $dirLit = $dir.Replace("'", "''")
+  $scriptBody = @(
+    '$ErrorActionPreference = ''Stop'''
+    ('New-Item -ItemType Directory -Force -Path ''{0}'' | Out-Null' -f $dirLit)
+    ('if (Test-Path -LiteralPath ''{0}'') {{' -f $destLit)
+    ('  $item = Get-Item -LiteralPath ''{0}'' -Force' -f $destLit)
+    '  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ''refusing reparse decoy destination'' }'
+    '  if ($item.PSIsContainer) { throw ''decoy destination is a directory'' }'
+    ('  Remove-Item -LiteralPath ''{0}'' -Force' -f $destLit)
+    '}'
+    ('Copy-Item -LiteralPath ''{0}'' -Destination ''{1}'' -Force' -f $srcLit, $destLit)
+  ) -join [Environment]::NewLine
+  Invoke-AsInteractiveUser $User $scriptBody
   Assert-NoReparse $Dest
-}
-function Unlock-VisibleTree([string]$DocumentsRoot, [string]$Rel, [string]$File, [string]$User) {
-  # Restore Documents to inherited ACLs so the user keeps normal write access.
-  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot) -and (Test-Path -LiteralPath $DocumentsRoot)) {
-    $null = cmd.exe /c ('icacls "{0}" /inheritance:e >nul' -f $DocumentsRoot)
-    if (-not [string]::IsNullOrWhiteSpace($User)) {
-      $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $DocumentsRoot, $User)
-    }
-  }
-  # Unlock every intermediate dir under Documents (Work, Work\Finance, ...).
-  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot) -and -not [string]::IsNullOrWhiteSpace($Rel)) {
-    $cur = $DocumentsRoot
-    foreach ($part in ($Rel -split '[\\/]+')) {
-      if ([string]::IsNullOrWhiteSpace($part)) { continue }
-      $cur = Join-Path $cur $part
-      if (-not (Test-Path -LiteralPath $cur)) { break }
-      $it = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
-      if ($null -eq $it -or -not $it.PSIsContainer) { break }
-      if ($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { break }
-      $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "{1}:(OI)(CI)M" >nul' -f $cur, $User)
-      if (-not [string]::IsNullOrWhiteSpace($User)) {
-        $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $cur, $User)
-      }
-    }
-  }
-  # Decoy file stays read-only for the user when present.
-  if (-not [string]::IsNullOrWhiteSpace($File) -and (Test-Path -LiteralPath $File)) {
-    $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
-    $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
-    Assert-NoReparse $File
+  if (-not (Test-Path -LiteralPath $Dest)) {
+    throw ("visible decoy was not installed: {0}" -f $Dest)
   }
 }
-function Grant-VisibleUserRead([string]$DocumentsRoot, [string]$Rel, [string]$File, [string]$User) {
-  Unlock-VisibleTree $DocumentsRoot $Rel $File $User
+function Apply-VisibleSACL([string]$Path) {
+  Assert-NoReparse $Path
+  $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
+  $acl = Get-Acl -Path $Path -Audit
+  $rule = New-Object System.Security.AccessControl.FileSystemAuditRule(
+    'Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success')
+  $acl.AddAuditRule($rule)
+  Set-Acl -Path $Path -AclObject $acl
+  Assert-NoReparse $Path
 }
 function Remove-VisibleDecoy([string]$DocumentsRoot, [string]$RelFile, [string]$User) {
   if ([string]::IsNullOrWhiteSpace($DocumentsRoot) -or [string]::IsNullOrWhiteSpace($RelFile)) { return }
   if (-not (Test-Path -LiteralPath $DocumentsRoot)) { return }
-  $parts = @($RelFile -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-  if ($parts.Count -lt 1) { return }
-  $dirRel = if ($parts.Count -gt 1) { [string]::Join('\', $parts[0..($parts.Count-2)]) } else { '' }
-  try {
-    Assert-NoReparse $DocumentsRoot
-    Lock-VisibleDir $DocumentsRoot $User
-    $cur = $DocumentsRoot
-    foreach ($part in $parts) {
-      $cur = Join-Path $cur $part
-      if (-not (Test-Path -LiteralPath $cur)) { return }
-      Assert-NoReparse $cur
-      $it = Get-Item -LiteralPath $cur -Force
-      if ($it.PSIsContainer) {
-        Lock-VisibleDir $cur $User
-      }
-    }
-    $item = Get-Item -LiteralPath $cur -Force
-    if ($item.PSIsContainer) {
-      Write-Host ("warning: skipping directory (not removing): {0}" -f $cur)
-      return
-    }
-    $null = cmd.exe /c ('takeown /F "{0}" /A >nul' -f $cur)
-    Assert-NoReparse $cur
-    Remove-Item -LiteralPath $cur -Force
-  } finally {
-    Unlock-VisibleTree $DocumentsRoot $dirRel $null $User
-  }
+  Assert-NoReparse $DocumentsRoot
+  $target = Join-Path $DocumentsRoot (($RelFile -replace '/', '\'))
+  if (-not (Test-Path -LiteralPath $target)) { return }
+  Assert-NoReparse $target
+  $targetLit = $target.Replace("'", "''")
+  $scriptBody = @(
+    '$ErrorActionPreference = ''Stop'''
+    ('if (Test-Path -LiteralPath ''{0}'') {{' -f $targetLit)
+    ('  $item = Get-Item -LiteralPath ''{0}'' -Force' -f $targetLit)
+    '  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ''refusing reparse decoy delete'' }'
+    '  if ($item.PSIsContainer) { throw ''refusing to delete directory'' }'
+    ('  Remove-Item -LiteralPath ''{0}'' -Force' -f $targetLit)
+    '}'
+  ) -join [Environment]::NewLine
+  Invoke-AsInteractiveUser $User $scriptBody
 }
 `
 }
