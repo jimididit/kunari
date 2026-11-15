@@ -48,6 +48,7 @@ type agentRecord struct {
 	OperatorAcked   bool      `json:"operator_acked,omitempty"`
 	RecoverPending  bool      `json:"recover_pending,omitempty"`
 	Retired         bool      `json:"retired,omitempty"`
+	alertClaimed    bool      // memory-only in-flight emit claim; not persisted / not recovery-visible
 }
 
 type agentTracker struct {
@@ -131,6 +132,7 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
 	rec.MissingAlerted = false
+	rec.alertClaimed = false
 	rec.OperatorAcked = false
 	rec.RecoverPending = false
 	rec.Retired = false
@@ -202,7 +204,7 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 			rec.Missing = true
 			changed = true
 		}
-		if !rec.MissingAlerted {
+		if !rec.MissingAlerted && !rec.alertClaimed {
 			cp := *rec
 			out = append(out, &cp)
 		}
@@ -244,13 +246,13 @@ func (t *agentTracker) NeedsMissingAlert(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	return rec != nil && !rec.Retired && !rec.OperatorAcked && rec.Missing && !rec.MissingAlerted
+	return rec != nil && !rec.Retired && !rec.OperatorAcked && rec.Missing && !rec.MissingAlerted && !rec.alertClaimed
 }
 
 // ClaimMissingAlert atomically claims the right to emit agent_missing under one
-// lock (sets MissingAlerted in memory only). Call MarkMissingAlerted after a
-// durable emit so a crash before emit can still retry; AbortMissingAlert if the
-// emit fails. AckMissing cannot interleave between check and mark while agentMu held.
+// lock (memory-only alertClaimed). Call MarkMissingAlerted after a durable emit;
+// AbortMissingAlert if the emit fails. alertClaimed is not persisted and does not
+// count as MissingAlerted for NoteHeartbeat recovery.
 func (t *agentTracker) ClaimMissingAlert(id string) bool {
 	if t == nil || id == "" {
 		return false
@@ -258,16 +260,14 @@ func (t *agentTracker) ClaimMissingAlert(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	if rec == nil || rec.Retired || rec.OperatorAcked || !rec.Missing || rec.MissingAlerted {
+	if rec == nil || rec.Retired || rec.OperatorAcked || !rec.Missing || rec.MissingAlerted || rec.alertClaimed {
 		return false
 	}
-	rec.MissingAlerted = true
+	rec.alertClaimed = true
 	return true
 }
 
 // AbortMissingAlert rolls back a ClaimMissingAlert when the durable emit failed.
-// Always clears MissingAlerted, including when OperatorAcked flipped mid-emit,
-// so a failed emit cannot forge agent_recovered via a leftover alerted flag.
 func (t *agentTracker) AbortMissingAlert(id string) {
 	if t == nil || id == "" {
 		return
@@ -275,15 +275,10 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	if rec == nil || !rec.MissingAlerted {
+	if rec == nil {
 		return
 	}
-	rec.MissingAlerted = false
-	if err := t.persistLocked(); err != nil {
-		t.lastErr = err.Error()
-	} else {
-		t.lastErr = ""
-	}
+	rec.alertClaimed = false
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
@@ -297,6 +292,7 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	if rec == nil || !rec.Missing {
 		return
 	}
+	rec.alertClaimed = false
 	rec.MissingAlerted = true
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()

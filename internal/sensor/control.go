@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -168,7 +169,7 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	if err != nil {
 		return err
 	}
-	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, string(compacted), j.ExpiresAt)
+	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, compacted, j.ExpiresAt)
 	if err != nil {
 		return err
 	}
@@ -234,7 +235,9 @@ func unescapeJobJSONHTML(b []byte) []byte {
 	return []byte(out.String())
 }
 
-func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, error) {
+func jobSignPayload(id, agentID, verb string, args json.RawMessage, exp time.Time) ([]byte, error) {
+	sum := sha256.Sum256(args)
+	argsDigest := hex.EncodeToString(sum[:])
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
 		n := len(s)
@@ -247,7 +250,7 @@ func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, erro
 		buf.WriteString(s)
 		return nil
 	}
-	for _, s := range []string{"kunari.job/1", id, agentID, verb, args, exp.UTC().Format(time.RFC3339Nano)} {
+	for _, s := range []string{"kunari.job/2", id, agentID, verb, argsDigest, exp.UTC().Format(time.RFC3339Nano)} {
 		if err := writeLP(s); err != nil {
 			return nil, err
 		}

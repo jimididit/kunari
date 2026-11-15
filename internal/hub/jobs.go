@@ -3,6 +3,7 @@ package hub
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -596,12 +597,15 @@ func oddBackslashesBefore(s string, i int) bool {
 }
 
 // jobSignPayload builds a length-prefixed, unambiguous message for Ed25519.
-// Field order: domain, id, agent_id, verb, args, expires_at (RFC3339Nano UTC).
+// Field order: domain, id, agent_id, verb, sha256hex(canonical args), expires_at (RFC3339Nano UTC).
+// Hashing args avoids JSON transport ambiguities (<>, &, U+2028/U+2029, empty/null).
 func jobSignPayload(j *Job) ([]byte, error) {
 	args, err := canonicalJSONArgs(j.Args)
 	if err != nil {
 		return nil, err
 	}
+	sum := sha256.Sum256(args)
+	argsDigest := hex.EncodeToString(sum[:])
 	exp := j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
@@ -615,7 +619,7 @@ func jobSignPayload(j *Job) ([]byte, error) {
 		buf.WriteString(s)
 		return nil
 	}
-	for _, s := range []string{"kunari.job/1", j.ID, j.AgentID, j.Verb, string(args), exp} {
+	for _, s := range []string{"kunari.job/2", j.ID, j.AgentID, j.Verb, argsDigest, exp} {
 		if err := writeLP(s); err != nil {
 			return nil, err
 		}

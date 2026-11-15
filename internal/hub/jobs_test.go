@@ -288,7 +288,7 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	if tr.ClaimMissingAlert("ack-agent") {
 		t.Fatal("double claim must fail")
 	}
-	// Claim is memory-only: reload must allow retry until MarkMissingAlerted persists.
+	// alertClaimed is memory-only: reload must allow retry until MarkMissingAlerted persists.
 	tr2, err := newAgentTracker(dir, 100*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -297,6 +297,7 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	if !tr2.ClaimMissingAlert("ack-agent") {
 		t.Fatal("claim must be retryable after crash before mark")
 	}
+	tr.AbortMissingAlert("ack-agent") // clear local claim so Ack below is clean
 	tr2.MarkMissingAlerted("ack-agent")
 	tr3, err := newAgentTracker(dir, 100*time.Millisecond)
 	if err != nil {

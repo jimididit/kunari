@@ -22,7 +22,7 @@ func TestVerifyJobAllowlistAndSig(t *testing.T) {
 		ID: "job-1", AgentID: "a1", Verb: verbStatusDump,
 		Args: args, ExpiresAt: exp,
 	}
-	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, string(args), exp)
+	payload, err := jobSignPayload(j.ID, j.AgentID, j.Verb, args, exp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestVerifyJobAllowlistAndSig(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Verb = "shell_exec"
-	payload2, _ := jobSignPayload(j.ID, j.AgentID, j.Verb, string(args), exp)
+	payload2, _ := jobSignPayload(j.ID, j.AgentID, j.Verb, args, exp)
 	j.Sig = "ed25519=" + hex.EncodeToString(keys.Sign(payload2))
 	if err := r.verifyJob(&j); err == nil {
 		t.Fatal("expected reject for shell_exec")
