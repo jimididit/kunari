@@ -9,7 +9,8 @@ import (
 )
 
 // ImportFile reads a signed manifest JSON file and upserts it into the store.
-func (s *Store) ImportFile(path string) (*Manifest, error) {
+// trustedPubHex must match the manifest signing public key.
+func (s *Store) ImportFile(path, trustedPubHex string) (*Manifest, error) {
 	path, err := safepath.Clean(path)
 	if err != nil {
 		return nil, err
@@ -22,7 +23,7 @@ func (s *Store) ImportFile(path string) (*Manifest, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, fmt.Errorf("manifest json: %w", err)
 	}
-	if err := s.Import(&m); err != nil {
+	if err := s.Import(&m, trustedPubHex); err != nil {
 		return nil, err
 	}
 	return &m, nil

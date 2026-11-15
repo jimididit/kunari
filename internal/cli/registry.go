@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/registry"
 	"github.com/spf13/cobra"
 )
@@ -12,20 +13,26 @@ func newImportCmd() *cobra.Command {
 	var (
 		db       string
 		manifest string
+		keyPath  string
 	)
 	cmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import a signed forge manifest into a registry",
-		Long: "Verify and upsert a .manifest.json into the given registry sqlite file.\n" +
-			"Point --registry at the hub data directory registry.db so beacons resolve on that collector.\n\n" +
+		Long: "Verify a .manifest.json against --key and upsert it into the registry sqlite file.\n" +
+			"Point --registry at the hub data directory registry.db so beacons resolve on that collector.\n" +
+			"--key must be the same Ed25519 key used to forge (typically <hub-data>/signing.key).\n\n" +
 			authorizedUse,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			keys, err := kcrypto.Load(keyPath)
+			if err != nil {
+				return fmt.Errorf("key: %w", err)
+			}
 			st, err := registry.Open(db)
 			if err != nil {
 				return err
 			}
 			defer st.Close()
-			m, err := st.ImportFile(manifest)
+			m, err := st.ImportFile(manifest, keys.PublicHex())
 			if err != nil {
 				return err
 			}
@@ -39,7 +46,9 @@ func newImportCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&db, "registry", "kunari-registry.db", "registry sqlite path (use <hub-data>/registry.db for the live hub)")
 	cmd.Flags().StringVar(&manifest, "manifest", "", "path to signed *.manifest.json")
+	cmd.Flags().StringVar(&keyPath, "key", "", "trusted forge/hub signing key path")
 	_ = cmd.MarkFlagRequired("manifest")
+	_ = cmd.MarkFlagRequired("key")
 	return cmd
 }
 

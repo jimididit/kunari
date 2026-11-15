@@ -50,6 +50,10 @@ func TestImportRequiresSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := &Manifest{
 		TokenID:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Name:      "unsigned",
@@ -59,12 +63,42 @@ func TestImportRequiresSignature(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 		Revoked:   true,
 	}
-	if err := st.Import(m); err == nil {
-		t.Fatal("expected verify failure for unsigned revoked manifest")
+	if err := st.Import(m, keys.PublicHex()); err == nil {
+		t.Fatal("expected failure for unsigned/revoked manifest")
 	}
 }
 
-func TestImportPreservesRevoked(t *testing.T) {
+func TestImportRequiresTrustedKey(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "reg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{
+		TokenID:   "cccccccccccccccccccccccccccccccc",
+		Name:      "lab",
+		Type:      "env",
+		Detect:    "beacon",
+		AuthzRef:  "LAB",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := m.Sign(keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Import(m, other.PublicHex()); err == nil {
+		t.Fatal("expected untrusted key rejection")
+	}
+}
+
+func TestImportRefusesRevoked(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "reg.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -96,15 +130,15 @@ func TestImportPreservesRevoked(t *testing.T) {
 	if err := again.Sign(keys); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Import(&again); err != nil {
-		t.Fatal(err)
+	if err := st.Import(&again, keys.PublicHex()); err == nil {
+		t.Fatal("expected import refused for revoked token")
 	}
 	got, err := st.Get(m.TokenID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.Revoked {
-		t.Fatal("re-import must not clear an existing revoke")
+		t.Fatal("revoked token must stay revoked")
 	}
 }
 
@@ -121,19 +155,19 @@ func TestImportVerifyAndPut(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &Manifest{
-		TokenID:     "fedcba9876543210fedcba9876543210",
-		Name:        "lab",
-		Type:        "env",
-		Detect:      "both",
-		AuthzRef:    "CASE-1",
-		Engagement:  "acme-q1",
-		AgentLabel:  "finance-laptop",
-		CreatedAt:   time.Now().UTC(),
+		TokenID:    "fedcba9876543210fedcba9876543210",
+		Name:       "lab",
+		Type:       "env",
+		Detect:     "both",
+		AuthzRef:   "CASE-1",
+		Engagement: "acme-q1",
+		AgentLabel: "finance-laptop",
+		CreatedAt:  time.Now().UTC(),
 	}
 	if err := m.Sign(keys); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Import(m); err != nil {
+	if err := st.Import(m, keys.PublicHex()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.Get(m.TokenID)
@@ -142,5 +176,8 @@ func TestImportVerifyAndPut(t *testing.T) {
 	}
 	if got.Engagement != "acme-q1" || got.AgentLabel != "finance-laptop" {
 		t.Fatalf("import lost engagement fields: %#v", got)
+	}
+	if err := got.Verify(); err != nil {
+		t.Fatalf("stored manifest must remain verifiable: %v", err)
 	}
 }

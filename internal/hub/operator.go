@@ -151,7 +151,11 @@ func (h *Hub) handleImportToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if err := h.reg.Import(&m); err != nil {
+	if h.keys == nil {
+		http.Error(w, "signing key unavailable", http.StatusInternalServerError)
+		return
+	}
+	if err := h.reg.Import(&m, h.keys.PublicHex()); err != nil {
 		h.log.Error("import token", "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

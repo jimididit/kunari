@@ -32,6 +32,7 @@ func newPackageAgentCmd() *cobra.Command {
 		engagement    string
 		agentLabel    string
 		hubRegistry   string
+		hubSigningKey string
 	)
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -59,6 +60,7 @@ func newPackageAgentCmd() *cobra.Command {
 				Engagement:    engagement,
 				AgentLabel:    agentLabel,
 				HubRegistry:   hubRegistry,
+				HubSigningKey: hubSigningKey,
 			}); err != nil {
 				return err
 			}
@@ -80,6 +82,7 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement id/name written into sentinel.json")
 	cmd.Flags().StringVar(&agentLabel, "agent-label", "", "operator label written into sentinel.json / heartbeats")
 	cmd.Flags().StringVar(&hubRegistry, "hub-registry", "", "hub registry.db path; imports sibling forge manifest after packaging")
+	cmd.Flags().StringVar(&hubSigningKey, "hub-signing-key", "", "trusted signing key for --hub-registry (default: <registry-dir>/signing.key)")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("out")
 	_ = cmd.MarkFlagRequired("artifact")

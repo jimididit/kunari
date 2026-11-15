@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/registry"
 	"github.com/jimididit/kunari/internal/safepath"
 	"github.com/jimididit/kunari/internal/sensor"
@@ -26,7 +27,8 @@ type AgentOptions struct {
 	UnitName      string // optional; systemd unit / launchd label / Windows task name
 	Engagement    string
 	AgentLabel    string
-	HubRegistry   string // optional hub registry.db; imports sibling manifest when set
+	HubRegistry    string // optional hub registry.db; imports sibling manifest when set
+	HubSigningKey  string // trusted signing key for --hub-registry import (default: sibling signing.key)
 }
 
 // BuildAgent writes an authorized-use agent package under OutDir.
@@ -180,12 +182,20 @@ func BuildAgent(opts AgentOptions) error {
 		if manPath == "" {
 			return fmt.Errorf("--hub-registry set but no sibling *.manifest.json next to artifact")
 		}
+		keyPath := strings.TrimSpace(opts.HubSigningKey)
+		if keyPath == "" {
+			keyPath = filepath.Join(filepath.Dir(regPath), "signing.key")
+		}
+		keys, err := kcrypto.Load(keyPath)
+		if err != nil {
+			return fmt.Errorf("hub signing key (use --hub-signing-key): %w", err)
+		}
 		st, err := registry.Open(regPath)
 		if err != nil {
 			return fmt.Errorf("hub registry: %w", err)
 		}
 		defer st.Close()
-		if _, err := st.ImportFile(manPath); err != nil {
+		if _, err := st.ImportFile(manPath, keys.PublicHex()); err != nil {
 			return fmt.Errorf("import manifest into hub registry: %w", err)
 		}
 	}

@@ -296,7 +296,7 @@ func renderInstall(m *registry.Manifest, filename, dirName string) string {
 	}
 	b.WriteString("\n## Registry\n\nImport into the hub collector registry after forge:\n\n")
 	b.WriteString("```\nkunari import --manifest " + shellQuote(sanitizeName(m.Name)+".manifest.json") +
-		" --registry ./data/registry.db\n```\n")
+		" --registry ./data/registry.db --key ./data/signing.key\n```\n")
 	b.WriteString("\n## Revoke\n\n`kunari revoke --token " + shellQuote(m.TokenID) +
 		" --registry ./data/registry.db` (hub UI revoke also works)\n")
 	return b.String()
