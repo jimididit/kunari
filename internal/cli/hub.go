@@ -24,9 +24,11 @@ func newHubCmd() *cobra.Command {
 		ingestSecret    string
 		apiToken        string
 		collectLvl      string
-		trustedProxies  []string
-		clientIPHeader  string
-		agentStaleAfter time.Duration
+		trustedProxies   []string
+		clientIPHeader   string
+		agentStaleAfter  time.Duration
+		beaconRatePerMin int
+		ingestRatePerMin int
 	)
 	cmd := &cobra.Command{
 		Use:   "hub",
@@ -52,6 +54,8 @@ func newHubCmd() *cobra.Command {
 				TrustedProxies:   trustedProxies,
 				ClientIPHeader:   clientIPHeader,
 				AgentStaleAfter:  agentStaleAfter,
+				BeaconRatePerMin: beaconRatePerMin,
+				IngestRatePerMin: ingestRatePerMin,
 				Collect:          lvl,
 			})
 			if err != nil {
@@ -75,6 +79,8 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil, "CIDR/IP of reverse proxies allowed to set client-IP header (repeatable); empty = trust RemoteAddr only")
 	cmd.Flags().StringVar(&clientIPHeader, "client-ip-header", "X-Forwarded-For", "header used when peer matches --trusted-proxy")
 	cmd.Flags().DurationVar(&agentStaleAfter, "agent-stale-after", 3*time.Minute, "alert when a heartbeating sentinel is silent this long (0 disables)")
+	cmd.Flags().IntVar(&beaconRatePerMin, "beacon-rate-limit", 60, "max GET|HEAD /b/{token} requests per client IP per minute (0 disables)")
+	cmd.Flags().IntVar(&ingestRatePerMin, "ingest-rate-limit", 30, "max POST ingest/jobs pull|result per client IP per minute (0 disables)")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if keyPath == "" {

@@ -34,8 +34,12 @@ type Config struct {
 	// hub emits an agent_missing alert. Zero disables missing-agent watch.
 	// Default (when unset via CLI): 3m.
 	AgentStaleAfter time.Duration
-	Collect         collect.Level
-	Logger          *slog.Logger
+	// BeaconRatePerMin caps GET|HEAD /b/{token} per client IP (0 disables).
+	BeaconRatePerMin int
+	// IngestRatePerMin caps POST /api/v1/ingest and job pull/result per client IP (0 disables).
+	IngestRatePerMin int
+	Collect          collect.Level
+	Logger           *slog.Logger
 }
 
 type Hub struct {
@@ -53,6 +57,8 @@ type Hub struct {
 	agents         *agentTracker
 	jobs           *jobStore
 	trustedProxies []*net.IPNet
+	beaconLimit    *ipRateLimiter
+	ingestLimit    *ipRateLimiter
 	mu             sync.Mutex
 	agentMu        sync.Mutex // serializes missing vs recovered agent emits
 	hits           int
@@ -141,6 +147,14 @@ func New(cfg Config) (*Hub, error) {
 		_ = reg.Close()
 		return nil, err
 	}
+	beaconLim := newIPRateLimiter(cfg.BeaconRatePerMin)
+	ingestLim := newIPRateLimiter(cfg.IngestRatePerMin)
+	if beaconLim != nil {
+		cfg.Logger.Info("hub beacon rate limit", "per_min", cfg.BeaconRatePerMin)
+	}
+	if ingestLim != nil {
+		cfg.Logger.Info("hub ingest rate limit", "per_min", cfg.IngestRatePerMin)
+	}
 	return &Hub{
 		cfg:            cfg,
 		log:            cfg.Logger,
@@ -156,6 +170,8 @@ func New(cfg Config) (*Hub, error) {
 		agents:         agents,
 		jobs:           jobs,
 		trustedProxies: trusted,
+		beaconLimit:    beaconLim,
+		ingestLimit:    ingestLim,
 	}, nil
 }
 

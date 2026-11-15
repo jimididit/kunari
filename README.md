@@ -134,6 +134,8 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
+Public beacon and ingest paths are rate-limited per client IP by default (`--beacon-rate-limit 60`, `--ingest-rate-limit 30`; `0` disables). Operator Bearer routes are not limited here (keep them off the public vhost).
+
 Copy-paste Caddy and nginx configs: [examples/tls-hub](examples/tls-hub/README.md).
 
 ## How detection works
