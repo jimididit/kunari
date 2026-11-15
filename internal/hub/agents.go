@@ -150,12 +150,14 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 	if ev.DetectionTier != "" {
 		rec.Tier = ev.DetectionTier
 	}
-	if caps, watches, ok := parseHeartbeatMeta(ev.Memo); ok {
-		if caps != "" {
-			rec.Capabilities = caps
+	if meta, ok := parseHeartbeatMeta(ev.Memo); ok {
+		if meta.Caps != "" {
+			rec.Capabilities = meta.Caps
 		}
-		// Always apply watches when present, including 0, so a reconfig clears stale counts.
-		rec.WatchCount = watches
+		// Apply watches only when the key is present (including 0); caps-only must not clear it.
+		if meta.HasWatches {
+			rec.WatchCount = meta.Watches
+		}
 	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
@@ -358,11 +360,18 @@ func (t *agentTracker) load() error {
 	return nil
 }
 
+type heartbeatMeta struct {
+	Caps       string
+	Watches    int
+	HasWatches bool
+}
+
 // parseHeartbeatMeta extracts watches=N and caps=... from a sentinel heartbeat memo.
 // caps= is expected last so capability text may contain semicolons.
-func parseHeartbeatMeta(memo string) (caps string, watches int, ok bool) {
+func parseHeartbeatMeta(memo string) (heartbeatMeta, bool) {
+	var meta heartbeatMeta
 	if memo == "" {
-		return "", 0, false
+		return meta, false
 	}
 	found := false
 	if i := strings.Index(memo, "watches="); i >= 0 {
@@ -377,17 +386,18 @@ func parseHeartbeatMeta(memo string) (caps string, watches int, ok bool) {
 			digits++
 		}
 		if digits > 0 {
-			watches = n
+			meta.Watches = n
+			meta.HasWatches = true
 			found = true
 		}
 	}
 	if i := strings.Index(memo, "caps="); i >= 0 {
-		caps = strings.TrimSpace(memo[i+len("caps="):])
-		if caps != "" {
+		meta.Caps = strings.TrimSpace(memo[i+len("caps="):])
+		if meta.Caps != "" {
 			found = true
 		}
 	}
-	return caps, watches, found
+	return meta, found
 }
 
 func (t *agentTracker) persistLocked() error {

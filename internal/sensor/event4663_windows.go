@@ -89,6 +89,7 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	bootstrapped := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,7 +99,19 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 			if err != nil {
 				continue
 			}
-			for _, touch := range parse4663(raw, w.targets) {
+			touches := parse4663(raw, w.targets)
+			if !bootstrapped {
+				// Seed seen with the current Security log window so a restart
+				// does not re-emit historical 4663s as fresh touches.
+				for _, touch := range touches {
+					if touch.Extra != nil {
+						_ = w.rememberRecord(touch.Extra["event_record_id"])
+					}
+				}
+				bootstrapped = true
+				continue
+			}
+			for _, touch := range touches {
 				key := ""
 				if touch.Extra != nil {
 					key = touch.Extra["event_record_id"]
@@ -166,12 +179,30 @@ func xpath4663(targets []Target) (string, error) {
 
 func winObjectNameVariants(p string) []string {
 	n := strings.TrimSpace(p)
-	n = strings.TrimPrefix(n, `\\?\`)
+	if strings.HasPrefix(strings.ToUpper(n), `\\?\UNC\`) {
+		n = `\\` + n[len(`\\?\UNC\`):]
+	} else {
+		n = strings.TrimPrefix(n, `\\?\`)
+	}
 	n = filepath.Clean(n)
-	out := []string{n}
-	long := `\\?\` + n
-	if long != n {
-		out = append(out, long)
+	var out []string
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		for _, e := range out {
+			if e == s {
+				return
+			}
+		}
+		out = append(out, s)
+	}
+	add(n)
+	if strings.HasPrefix(n, `\\`) {
+		// \\server\share\file -> \\?\UNC\server\share\file
+		add(`\\?\UNC\` + strings.TrimPrefix(n, `\\`))
+	} else {
+		add(`\\?\` + n)
 	}
 	return out
 }

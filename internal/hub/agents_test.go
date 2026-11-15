@@ -146,11 +146,15 @@ func TestAgentKeyFallback(t *testing.T) {
 }
 
 func TestParseHeartbeatMeta(t *testing.T) {
-	caps, watches, ok := parseHeartbeatMeta("heartbeat;every=60s;watches=2;caps=open/read; needs admin")
-	if !ok || watches != 2 || caps != "open/read; needs admin" {
-		t.Fatalf("got ok=%v watches=%d caps=%q", ok, watches, caps)
+	meta, ok := parseHeartbeatMeta("heartbeat;every=60s;watches=2;caps=open/read; needs admin")
+	if !ok || !meta.HasWatches || meta.Watches != 2 || meta.Caps != "open/read; needs admin" {
+		t.Fatalf("got ok=%v meta=%+v", ok, meta)
 	}
-	if _, _, ok := parseHeartbeatMeta("heartbeat;every=60s"); ok {
+	capsOnly, ok := parseHeartbeatMeta("heartbeat;every=60s;caps=open/read")
+	if !ok || capsOnly.HasWatches || capsOnly.Caps != "open/read" {
+		t.Fatalf("caps-only got ok=%v meta=%+v", ok, capsOnly)
+	}
+	if _, ok := parseHeartbeatMeta("heartbeat;every=60s"); ok {
 		t.Fatal("expected no meta")
 	}
 }
@@ -182,5 +186,17 @@ func TestNoteHeartbeatStoresCapabilities(t *testing.T) {
 	snap = tr.Snapshot()
 	if snap[0].WatchCount != 0 {
 		t.Fatalf("expected watches cleared to 0, got %d", snap[0].WatchCount)
+	}
+	ev3 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev3.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev3.Memo = "heartbeat;every=60s;watches=3;caps=open/read"
+	tr.NoteHeartbeat(ev3)
+	ev4 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev4.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev4.Memo = "heartbeat;every=60s;caps=open/read only"
+	tr.NoteHeartbeat(ev4)
+	snap = tr.Snapshot()
+	if snap[0].WatchCount != 3 {
+		t.Fatalf("caps-only must not clear watches; got %d", snap[0].WatchCount)
 	}
 }

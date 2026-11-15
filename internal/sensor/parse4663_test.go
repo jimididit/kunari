@@ -130,6 +130,19 @@ func TestXPath4663FiltersObjectName(t *testing.T) {
 	if _, err := xpath4663([]Target{{Path: `C:\lab\canary.env'`}}); err == nil {
 		t.Fatal("expected reject for quote in path")
 	}
+	unc, err := xpath4663([]Target{{Path: `\\server\share\decoy.env`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unc, `ObjectName']='\\server\share\decoy.env'`) {
+		t.Fatalf("unc query %s", unc)
+	}
+	if !strings.Contains(unc, `ObjectName']='\\?\UNC\server\share\decoy.env'`) {
+		t.Fatalf("unc long variant missing: %s", unc)
+	}
+	if strings.Contains(unc, `ObjectName']='\\?\\server`) {
+		t.Fatalf("broken unc long path: %s", unc)
+	}
 }
 
 func TestRememberRecordAllowsRepeatReads(t *testing.T) {
