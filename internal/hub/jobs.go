@@ -149,8 +149,8 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		j.DoneAt = &now
 		detail = jobStatusDone
 	}
-	s.trimLocked() // free room before insert so rollback does not fight trim
 	s.jobs[j.ID] = j
+	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
 		At:      now,
 		Actor:   createdBy,
@@ -161,9 +161,11 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	})
 	if err := s.persistLocked(); err != nil {
 		delete(s.jobs, j.ID)
-		s.removeAuditJobLocked(j.ID)
+		s.audit = s.audit[:auditLen]
 		return nil, err
 	}
+	s.trimLocked()
+	_ = s.persistLocked() // best-effort trim persist; enqueue already durable
 	cp := *j
 	return &cp, nil
 }
@@ -338,15 +340,6 @@ func (s *jobStore) PendingCount() int {
 	return n
 }
 
-func (s *jobStore) removeAuditJobLocked(jobID string) {
-	for i := len(s.audit) - 1; i >= 0; i-- {
-		if s.audit[i].JobID == jobID {
-			s.audit = append(s.audit[:i], s.audit[i+1:]...)
-			return
-		}
-	}
-}
-
 func (s *jobStore) trimLocked() {
 	if len(s.jobs) <= maxJobsPersisted {
 		return
@@ -378,7 +371,7 @@ func (s *jobStore) trimLocked() {
 }
 
 func (s *jobStore) load(dataDir string) error {
-	if b, err := os.ReadFile(s.path); err == nil { // #nosec G304 -- under data_dir
+	if b, err := os.ReadFile(s.path); err == nil { // #nosec G304
 		var doc jobStoreFile
 		if err := json.Unmarshal(b, &doc); err != nil {
 			return err
@@ -392,10 +385,10 @@ func (s *jobStore) load(dataDir string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	// Migrate legacy split files from earlier Phase E builds.
+	// Migrate legacy split files from earlier Phase E builds (paths under safepath-cleaned dataDir).
 	legacyJobs := filepath.Join(dataDir, "jobs.json")
 	legacyAudit := filepath.Join(dataDir, "jobs-audit.json")
-	if b, err := os.ReadFile(legacyJobs); err == nil { // #nosec G304 -- under data_dir
+	if b, err := os.ReadFile(legacyJobs); err == nil { // #nosec G304
 		var items []Job
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err
@@ -407,7 +400,7 @@ func (s *jobStore) load(dataDir string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if b, err := os.ReadFile(legacyAudit); err == nil { // #nosec G304 -- under data_dir
+	if b, err := os.ReadFile(legacyAudit); err == nil { // #nosec G304
 		var items []AuditEntry
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err

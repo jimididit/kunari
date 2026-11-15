@@ -153,12 +153,17 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ack_missing is hub-side: clear Missing immediately so operators need not wait for a pull.
-	if j.Verb == VerbAckMissing && h.agents != nil {
+	if j.Verb == VerbAckMissing {
+		if h.agents == nil {
+			http.Error(w, "agent watch disabled", http.StatusBadRequest)
+			return
+		}
 		h.agentMu.Lock()
 		err := h.agents.AckMissing(agentID)
 		h.agentMu.Unlock()
 		if err != nil {
-			h.log.Info("ack_missing enqueue", "agent_id", agentID, "err", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
