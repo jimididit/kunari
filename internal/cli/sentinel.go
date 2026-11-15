@@ -38,6 +38,7 @@ func newSentinelRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			r.ConfigPath = cfgPath
 			defer r.Close()
 			// Interactive TTY: show tier + authorized-use banner. Services stay quieter
 			// (details go to slog; avoid argv/config path chatter in journals).

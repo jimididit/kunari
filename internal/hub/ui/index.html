@@ -38,6 +38,7 @@
         <div class="stat"><span class="label">last seq</span><span id="stat-seq" class="value">-</span></div>
         <div class="stat"><span class="label">queue</span><span id="stat-queue" class="value">-</span></div>
         <div class="stat"><span class="label">agents</span><span id="stat-agents" class="value">-</span></div>
+        <div class="stat"><span class="label">jobs</span><span id="stat-jobs" class="value">-</span></div>
         <div class="stat wide"><span class="label">sinks</span><span id="stat-sinks" class="value mono">-</span></div>
       </div>
       <p id="agents-warn" class="error tight hidden"></p>
@@ -45,7 +46,7 @@
       <section class="panel agents-panel">
         <div class="panel-head">
           <h2>Sentinel agents</h2>
-          <p class="lede tight">Last heartbeat from each agent. Missing means no heartbeat within the hub <code>--agent-stale-after</code> window. Retire removes reimaged or decommissioned hosts from the board.</p>
+          <p class="lede tight">Last heartbeat from each agent. Missing means no heartbeat within the hub <code>--agent-stale-after</code> window. Queue allowlisted jobs (reload watches, status dump, ack missing). Retire removes reimaged or decommissioned hosts from the board. Not a shell.</p>
         </div>
         <div class="table-wrap">
           <table>
@@ -62,7 +63,7 @@
                 <th>version</th>
                 <th>last seen</th>
                 <th>agent id</th>
-                <th></th>
+                <th>actions</th>
               </tr>
             </thead>
             <tbody id="agents-body"></tbody>
@@ -71,12 +72,37 @@
         <p id="agents-empty" class="empty">No heartbeating agents yet (configure sentinel <code>hub_url</code>).</p>
       </section>
 
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Control-plane audit</h2>
+          <button type="button" id="btn-refresh-audit" class="btn ghost">Refresh</button>
+        </div>
+        <p class="lede tight">Allowlisted verbs only: reload_config, set_targets, status_dump, ack_missing, rotate_hub_url_hint.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>time</th>
+                <th>actor</th>
+                <th>agent</th>
+                <th>verb</th>
+                <th>job</th>
+                <th>detail</th>
+              </tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+        <p id="audit-empty" class="empty">No control-plane jobs yet.</p>
+      </section>
+
       <aside id="agent-drawer" class="drawer hidden" aria-live="polite">
         <div class="drawer-head">
           <h2 id="drawer-title">Agent</h2>
           <button type="button" id="drawer-close" class="btn ghost">Close</button>
         </div>
         <dl id="drawer-meta" class="drawer-meta"></dl>
+        <div id="drawer-actions" class="drawer-actions"></div>
         <h3 class="drawer-sub">Recent alerts</h3>
         <div class="table-wrap">
           <table>

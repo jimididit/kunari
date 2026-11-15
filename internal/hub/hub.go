@@ -51,6 +51,7 @@ type Hub struct {
 	seen           *seenIDs
 	subs           *apiSubs
 	agents         *agentTracker
+	jobs           *jobStore
 	trustedProxies []*net.IPNet
 	mu             sync.Mutex
 	agentMu        sync.Mutex // serializes missing vs recovered agent emits
@@ -135,6 +136,11 @@ func New(cfg Config) (*Hub, error) {
 	if agents.enabled() {
 		cfg.Logger.Info("hub agent watch enabled", "stale_after", cfg.AgentStaleAfter.String())
 	}
+	jobs, err := newJobStore(cfg.DataDir, ingestSecret)
+	if err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
 	return &Hub{
 		cfg:            cfg,
 		log:            cfg.Logger,
@@ -148,6 +154,7 @@ func New(cfg Config) (*Hub, error) {
 		seen:           newSeenIDs(8192),
 		subs:           newAPISubs(),
 		agents:         agents,
+		jobs:           jobs,
 		trustedProxies: trusted,
 	}, nil
 }

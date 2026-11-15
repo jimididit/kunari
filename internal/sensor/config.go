@@ -93,6 +93,14 @@ func WriteExampleConfig(path string, targets []Target, hubURL, hubSecretFile str
 		HubURL:         hubURL,
 		HubSecretFile:  hubSecretFile,
 	}
+	return SaveConfig(path, &c)
+}
+
+// SaveConfig writes sentinel config with restrictive permissions.
+func SaveConfig(path string, c *Config) error {
+	if c == nil {
+		return fmt.Errorf("nil config")
+	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
