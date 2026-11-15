@@ -33,6 +33,8 @@ func newPackageAgentCmd() *cobra.Command {
 		agentLabel    string
 		hubRegistry   string
 		hubSigningKey string
+		visibleUnder  string
+		clientBundle  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -42,8 +44,11 @@ func newPackageAgentCmd() *cobra.Command {
 			"(rename it to match --binary-name if set).\n\n" +
 			"Optional OPSEC knobs: --binary-name, --unit-name, --prefix. Names that impersonate " +
 			"well-known OS binaries or services are denied. This is authorized packaging, not stealth.\n\n" +
+			"--visible-under places the watched decoy under the interactive user's Documents " +
+			"(e.g. Work/Finance) so a normal open can trip the sentinel; secrets stay under --prefix. " +
+			"--client-bundle omits operator-only DEPLOY.md and bin/README.txt.\n\n" +
 			"Forge the decoy with --detect both first so beacons remain if the sentinel is stopped. " +
-			"DEPLOY.md in the package repeats this dual-layer guidance.\n\n" +
+			"DEPLOY.md in the package (unless --client-bundle) repeats this dual-layer guidance.\n\n" +
 			authorizedUse,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := pack.BuildAgent(pack.AgentOptions{
@@ -61,6 +66,8 @@ func newPackageAgentCmd() *cobra.Command {
 				AgentLabel:    agentLabel,
 				HubRegistry:   hubRegistry,
 				HubSigningKey: hubSigningKey,
+				VisibleUnder:  visibleUnder,
+				ClientBundle:  clientBundle,
 			}); err != nil {
 				return err
 			}
@@ -83,6 +90,8 @@ func newPackageAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&agentLabel, "agent-label", "", "operator label written into sentinel.json / heartbeats")
 	cmd.Flags().StringVar(&hubRegistry, "hub-registry", "", "hub registry.db path; imports sibling forge manifest after packaging")
 	cmd.Flags().StringVar(&hubSigningKey, "hub-signing-key", "", "trusted signing key for --hub-registry (default: <registry-dir>/signing.key)")
+	cmd.Flags().StringVar(&visibleUnder, "visible-under", "", "Documents-relative decoy dir (e.g. Work/Finance); install watches that path")
+	cmd.Flags().BoolVar(&clientBundle, "client-bundle", false, "omit operator-only DEPLOY.md and bin/README.txt")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("out")
 	_ = cmd.MarkFlagRequired("artifact")

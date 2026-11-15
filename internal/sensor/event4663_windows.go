@@ -26,6 +26,9 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 	}
 	var parts []string
 	for _, t := range targets {
+		if err := ensureFileSystemAuditACE(t.Path); err != nil {
+			return nil, fmt.Errorf("SACL on %s: %w", t.Path, err)
+		}
 		parts = append(parts, strings.ToLower(filepath.Clean(t.Path))+"|"+t.TokenID)
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, ";") + "|win-sacl-4663"))
@@ -34,6 +37,23 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 		hash:    hex.EncodeToString(sum[:]),
 		seen:    map[string]struct{}{},
 	}, nil
+}
+
+// ensureFileSystemAuditACE enables File System success auditing and attaches a
+// per-file success audit ACE. Called from the elevated sentinel at startup so
+// package install never Set-Acl's through a user-writable Documents path.
+func ensureFileSystemAuditACE(path string) error {
+	if !safeObjectName(path) {
+		return fmt.Errorf("path not safe for SACL helper")
+	}
+	// Refuse reparse points, then set audit ACE. Path is single-quoted for PowerShell.
+	ps := fmt.Sprintf(`$ErrorActionPreference='Stop'; $p='%s'; $i=Get-Item -LiteralPath $p -Force; if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse point' }; if ($i.PSIsContainer) { throw 'not a file' }; $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'; $acl=Get-Acl -Path $p -Audit; $rule=New-Object System.Security.AccessControl.FileSystemAuditRule('Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success'); $acl.AddAuditRule($rule); Set-Acl -Path $p -AclObject $acl; $i2=Get-Item -LiteralPath $p -Force; if ($i2.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse after SACL' }`, strings.ReplaceAll(path, `'`, `''`))
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps) // #nosec G204 -- argv; path charset-checked + single-quoted
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, truncate(string(out), 240))
+	}
+	return nil
 }
 
 func (w *event4663Watcher) Tier() Tier { return TierWinSACL }

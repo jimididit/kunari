@@ -2,7 +2,7 @@ package pack
 
 import "fmt"
 
-func deployMarkdown(goos, prefix, binName, unitName, decoyBase, detect string) string {
+func deployMarkdown(goos, prefix, binName, unitName, decoyBase, detect, visibleUnder string) string {
 	warn := ""
 	switch detect {
 	case "", "both":
@@ -22,6 +22,17 @@ func deployMarkdown(goos, prefix, binName, unitName, decoyBase, detect string) s
 		persist = fmt.Sprintf("launchd label `%s`", unitName)
 	default:
 		persist = fmt.Sprintf("systemd unit `%s.service`", unitName)
+	}
+
+	watchNote := fmt.Sprintf("secrets and sentinel config under `%s`; decoy watched under `%s/decoys/%s` after install", prefix, prefix, decoyBase)
+	if visibleUnder != "" {
+		docsRel := visibleUnder
+		switch goos {
+		case "windows":
+			watchNote = fmt.Sprintf("secrets under `%s`; decoy installed+watched at interactive user `Documents\\%s\\%s` (placeholder in packaged sentinel.json is rewritten at install)", prefix, docsRel, decoyBase)
+		default:
+			watchNote = fmt.Sprintf("secrets under `%s`; decoy installed+watched at interactive user `Documents/%s/%s` (placeholder in packaged sentinel.json is rewritten at install)", prefix, docsRel, decoyBase)
+		}
 	}
 
 	return fmt.Sprintf(`# Kunari agent package (%s)
@@ -53,7 +64,7 @@ kunari package agent --target %s --out ./agent-pack \
 ## Contents
 
 - decoys/%s - forged decoy (with `+"`--detect both`"+`, beacon may still fire if the sentinel is stopped)
-- etc/sentinel.json - sentinel config (install paths under %s)
+- etc/sentinel.json - sentinel config (%s)
 - etc/ingest.secret - hub HMAC key file (embedded at package time; required)
 - bin/ - place %s here before install
 - platform install script and service unit (%s)
@@ -72,8 +83,11 @@ Notes:
 - Windows: install.ps1 registers a SYSTEM scheduled task (ONSTART). The package binary is not a Windows Service binary, so sc.exe create will time out.
 - Persistence name for this package: %s.
 - Optional OPSEC knobs at package time: `+"`--binary-name`"+`, `+"`--unit-name`"+`, `+"`--prefix`"+`. Do not choose names that impersonate OS components (denied by the packager).
+- Human-visible decoy: `+"`--visible-under Work/Finance`"+` installs and watches under the interactive user's Documents; secrets stay under the private prefix. Windows also applies the File System audit SACL at install. Install refuses symlink/junction components under Documents.
+- Client handoff: `+"`--client-bundle`"+` omits this DEPLOY.md and bin/README.txt.
+- Uninstall: run uninstall.sh / uninstall.ps1 from the same package (elevated); visible-path uninstall skips symlinks/reparse points.
 - Hub: with hub push configured, silence longer than `+"`--agent-stale-after`"+` emits `+"`agent_missing`"+` (time-to-notice, not stealth).
 
 This is an agent deploy (sentinel process on the endpoint). It is not beacon-only.
-`, goos, warn, goos, decoyBase, prefix, binName, persist, binName, prefix, persist)
+`, goos, warn, goos, decoyBase, watchNote, binName, persist, binName, prefix, persist)
 }

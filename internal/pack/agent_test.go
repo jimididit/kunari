@@ -35,6 +35,7 @@ func TestBuildAgentLinux(t *testing.T) {
 	for _, rel := range []string{
 		"DEPLOY.md",
 		"install.sh",
+		"uninstall.sh",
 		"kunari-sentinel.service",
 		"decoys/bait.env",
 		"etc/sentinel.json",
@@ -145,7 +146,7 @@ func TestBuildAgentRejectsLinuxHomePrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), "/home") {
 		t.Fatalf("error should mention /home: %v", err)
 	}
-	sh := linuxInstall("/home/jdi/kunari-agent", "kunari", "kunari-sentinel")
+	sh := linuxInstall("/home/jdi/kunari-agent", "kunari", "kunari-sentinel", "", "")
 	if !strings.Contains(sh, "/home/*") {
 		t.Fatal("install.sh should guard against /home prefixes at runtime")
 	}
@@ -209,6 +210,9 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	if !strings.Contains(body, "icacls") {
 		t.Fatal("windows install should set ACLs")
 	}
+	if _, err := os.Stat(filepath.Join(out, "uninstall.ps1")); err != nil {
+		t.Fatal("windows package should include uninstall.ps1")
+	}
 	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +222,196 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(deploy), "Dual-layer") || !strings.Contains(string(deploy), "--detect both") {
 		t.Fatal("DEPLOY.md should recommend forge --detect both")
+	}
+}
+
+func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "payroll-2024.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("STATUS_URL=https://hub.example.com/t/x\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "winpack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "windows",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		VisibleUnder:  "Documents/Work/Finance",
+		ClientBundle:  true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "DEPLOY.md")); err == nil {
+		t.Fatal("client bundle must omit DEPLOY.md")
+	}
+	if _, err := os.Stat(filepath.Join(out, "bin", "README.txt")); err == nil {
+		t.Fatal("client bundle must omit bin/README.txt")
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "etc", "sentinel.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg sensor.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := `__KUNARI_VISIBLE__\Work\Finance\payroll-2024.env`
+	if cfg.Targets[0].Path != want {
+		t.Fatalf("got %q want %q", cfg.Targets[0].Path, want)
+	}
+	if len(cfg.PreferTier) == 0 || cfg.PreferTier[0] != "win-sacl-4663" {
+		t.Fatalf("prefer_tiers=%v", cfg.PreferTier)
+	}
+	ps1, err := os.ReadFile(filepath.Join(out, "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(ps1)
+	for _, needle := range []string{
+		"$VisibleUnder = 'Work\\Finance'",
+		"ConvertFrom-Json",
+		"Documents",
+		"Assert-NoReparse",
+		"Install-VisibleDecoy",
+		"Invoke-AsInteractiveUser",
+		"Resolve-InteractiveProfile",
+		"UTF8Encoding",
+		"Authenticated Users:R",
+		"auditpol /set",
+		"SACL is applied by the SYSTEM sentinel",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("install.ps1 missing %q", needle)
+		}
+	}
+	if strings.Contains(body, "Apply-VisibleSACL") || strings.Contains(body, "mklink /H") {
+		t.Fatal("windows visible install must not hardlink or Set-Acl user Documents paths")
+	}
+	if !strings.Contains(body, "267011") || !strings.Contains(body, "SCHED_S_TASK_HAS_NOT_RUN") {
+		t.Fatal("windows install must wait for SCHED_S_TASK_HAS_NOT_RUN, not only RUNNING")
+	}
+	if strings.Contains(body, "Lock-VisibleDir") || strings.Contains(body, "takeown") {
+		t.Fatal("windows visible install must not takeown/lock user Documents as SYSTEM")
+	}
+	if strings.Contains(body, "Set-Content -LiteralPath $cfgPath -Encoding utf8") {
+		t.Fatal("windows install must write sentinel.json without a UTF-8 BOM")
+	}
+	if strings.Contains(body, `Join-Path 'C:\\Users' $userSam`) || strings.Contains(body, `Join-Path 'C:\Users' $userSam`) {
+		t.Fatal("windows install must resolve profile via SID, not C:\\Users\\<sam>")
+	}
+	if strings.Contains(body, ".kunari.tmp") {
+		t.Fatal("windows install must not use a predictable temp decoy path")
+	}
+	if strings.Contains(body, "python3 -") || strings.Contains(body, "python3<<") {
+		t.Fatal("windows install must not invoke python")
+	}
+}
+
+func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "payroll-2024.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("x=1\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "pack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "linux",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		VisibleUnder:  "Work/Finance",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sh, err := os.ReadFile(filepath.Join(out, "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(sh)
+	if strings.Contains(body, "python3 -") || strings.Contains(body, "<<'PY'") || strings.Contains(body, "python3<<") {
+		t.Fatal("linux install must not invoke python")
+	}
+	for _, needle := range []string{
+		"refuse_if_symlink",
+		"install_visible_decoy",
+		"patch_sentinel_watch",
+		"safe_rm_visible_file",
+		"run_as_user",
+		"jq is required",
+		"printf '%s'",
+		"grant_kunari_acl_as_user",
+		"SUDO_USER",
+		"refusing to guess",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("install.sh missing %q", needle)
+		}
+	}
+	if strings.Contains(body, "SupplementaryGroups=") {
+		t.Fatal("linux visible install must not join the interactive user's group")
+	}
+	if strings.Contains(body, "\n  ln ") || strings.Contains(body, " ln \"") {
+		t.Fatal("linux visible install must not hardlink user Documents paths as root")
+	}
+	if strings.Contains(body, "awk -F:") {
+		t.Fatal("linux visible install must not guess an arbitrary uid>=1000 user")
+	}
+	if strings.Contains(body, "printf '%%s'") {
+		t.Fatal("install.sh must not emit literal percent-percent-s from Go escaping mistake")
+	}
+	if strings.Contains(body, "sed \"s|") {
+		t.Fatal("linux visible install must not use sed to patch sentinel.json")
+	}
+	if !strings.Contains(body, `run_as_user "$owner" setfacl`) {
+		t.Fatal("linux visible install must apply setfacl as the file owner, not root")
+	}
+	if strings.Contains(body, "\n  setfacl ") || strings.Contains(body, "\nsetfacl ") {
+		t.Fatal("linux visible install must not invoke setfacl as root on user paths")
+	}
+	if strings.Contains(body, "chown root:root") {
+		t.Fatal("linux visible install must not chown user tree to root")
+	}
+	if strings.Contains(body, ".kunari.tmp") {
+		t.Fatal("linux install must not use a predictable temp decoy path")
+	}
+	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deploy), "Documents/Work/Finance/payroll-2024.env") {
+		t.Fatal("DEPLOY.md should describe the visible Documents watch path")
+	}
+	un, err := os.ReadFile(filepath.Join(out, "uninstall.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(un), "safe_rm_visible_file") {
+		t.Fatal("uninstall.sh should use safe_rm_visible_file")
+	}
+}
+
+func TestValidateVisibleUnder(t *testing.T) {
+	got, err := validateVisibleUnder("windows", `Documents\Work\Finance`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `Work\Finance` {
+		t.Fatalf("got %q", got)
+	}
+	got, err = validateVisibleUnder("linux", "Work/Finance")
+	if err != nil || got != "Work/Finance" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	if _, err := validateVisibleUnder("windows", "Documents"); err == nil {
+		t.Fatal("expected error for Documents alone")
+	}
+	if _, err := validateVisibleUnder("linux", "../etc"); err == nil {
+		t.Fatal("expected path traversal rejection")
 	}
 }
 

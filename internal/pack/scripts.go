@@ -5,10 +5,13 @@ import (
 	"strings"
 )
 
-func linuxInstall(prefix, binName, unitName string) string {
+func linuxInstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
 	pq := shQuote(prefix)
 	bq := shQuote(binName)
 	uq := shQuote(unitName)
+	vq := shQuote(visibleUnder)
+	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper install (Linux).
 set -euo pipefail
@@ -16,8 +19,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
 BIN_NAME=%s
 UNIT_NAME=%s
+VISIBLE_UNDER=%s
+DECOY_BASE=%s
 UNIT_FILE="$UNIT_NAME.service"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
+%s
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
@@ -42,6 +48,37 @@ install -m 0755 -o root -g root "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 -o kunari -g kunari "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 -o kunari -g kunari "$ROOT/decoys/"* "$PREFIX/decoys/"
+
+WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
+VISIBLE_PATH=""
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  TARGET_USER="$(logname 2>/dev/null || true)"
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    TARGET_USER="${SUDO_USER:-}"
+  fi
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    echo "error: could not resolve interactive user for --visible-under (need logname or SUDO_USER; refusing to guess)" >&2
+    exit 1
+  fi
+  HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+  if [[ -z "$HOME_DIR" || ! -d "$HOME_DIR" ]]; then
+    echo "error: home directory missing for $TARGET_USER" >&2
+    exit 1
+  fi
+  refuse_if_symlink "$HOME_DIR"
+  DOCS_ROOT="$HOME_DIR/Documents"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
+  VISIBLE_PATH="$VISIBLE_DIR/$DECOY_BASE"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$VISIBLE_PATH" "$TARGET_USER"
+  # Grant kunari access via owner-applied setfacl (no root hardlink / root setfacl).
+  grant_kunari_acl_as_user "$TARGET_USER" "$HOME_DIR" "$VISIBLE_PATH"
+  WATCH_PATH="$VISIBLE_PATH"
+  PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
+  patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
+  chown kunari:kunari "$PREFIX/etc/sentinel.json"
+  chmod 0600 "$PREFIX/etc/sentinel.json"
+fi
+
 # Remove legacy default unit when operators rename persistence.
 if [[ "$UNIT_NAME" != "kunari-sentinel" ]] && [[ -f /etc/systemd/system/kunari-sentinel.service ]]; then
   systemctl disable --now kunari-sentinel.service 2>/dev/null || true
@@ -51,7 +88,49 @@ install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
 systemctl daemon-reload
 systemctl enable --now "$UNIT_FILE"
 echo "installed under $PREFIX; service $UNIT_NAME started"
-`, pq, bq, uq)
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  echo "watching visible decoy: $WATCH_PATH"
+fi
+`, pq, bq, uq, vq, dq, helpers)
+}
+
+func linuxUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
+	pq := shQuote(prefix)
+	bq := shQuote(binName)
+	uq := shQuote(unitName)
+	vq := shQuote(visibleUnder)
+	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
+	return fmt.Sprintf(`#!/usr/bin/env bash
+# Endpoint helper uninstall (Linux).
+set -euo pipefail
+PREFIX=%s
+BIN_NAME=%s
+UNIT_NAME=%s
+VISIBLE_UNDER=%s
+DECOY_BASE=%s
+UNIT_FILE="$UNIT_NAME.service"
+%s
+systemctl disable --now "$UNIT_FILE" 2>/dev/null || true
+rm -f "/etc/systemd/system/$UNIT_FILE"
+systemctl daemon-reload 2>/dev/null || true
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  TARGET_USER="$(logname 2>/dev/null || true)"
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    TARGET_USER="${SUDO_USER:-}"
+  fi
+  if [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]]; then
+    HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+    if [[ -n "$HOME_DIR" ]]; then
+      safe_rm_visible_file "$TARGET_USER" "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
+    fi
+  else
+    echo "warning: skipping visible decoy removal; could not resolve interactive user" >&2
+  fi
+fi
+rm -rf "$PREFIX"
+echo "uninstalled $UNIT_NAME and removed $PREFIX"
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func linuxUnit(prefix, binName string) string {
@@ -77,10 +156,13 @@ WantedBy=multi-user.target
 `, cfg, bin)
 }
 
-func darwinInstall(prefix, binName, unitName string) string {
+func darwinInstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
 	pq := shQuote(prefix)
 	bq := shQuote(binName)
 	uq := shQuote(unitName)
+	vq := shQuote(visibleUnder)
+	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # Endpoint helper install (macOS).
 set -euo pipefail
@@ -88,8 +170,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX=%s
 BIN_NAME=%s
 UNIT_NAME=%s
+VISIBLE_UNDER=%s
+DECOY_BASE=%s
 PLIST_SRC="$ROOT/$UNIT_NAME.plist"
 BIN_SRC="$ROOT/bin/$BIN_NAME"
+%s
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: place $BIN_NAME in $ROOT/bin/ first" >&2
   exit 1
@@ -107,6 +192,36 @@ install -m 0755 "$BIN_SRC" "$PREFIX/bin/$BIN_NAME"
 install -m 0600 "$ROOT/etc/sentinel.json" "$PREFIX/etc/sentinel.json"
 install -m 0600 "$ROOT/etc/ingest.secret" "$PREFIX/etc/ingest.secret"
 install -m 0600 "$ROOT/decoys/"* "$PREFIX/decoys/"
+
+WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  TARGET_USER="$(stat -f '%%Su' /dev/console 2>/dev/null || true)"
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    TARGET_USER="$(logname 2>/dev/null || true)"
+  fi
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    echo "error: could not resolve console user for --visible-under" >&2
+    exit 1
+  fi
+  HOME_DIR="$(dscl . -read /Users/"$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  if [[ -z "$HOME_DIR" ]]; then
+    HOME_DIR="/Users/$TARGET_USER"
+  fi
+  if [[ ! -d "$HOME_DIR" ]]; then
+    echo "error: home directory missing for $TARGET_USER" >&2
+    exit 1
+  fi
+  refuse_if_symlink "$HOME_DIR"
+  DOCS_ROOT="$HOME_DIR/Documents"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
+  WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER"
+  restore_docs_write "$DOCS_ROOT"
+  PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
+  patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
+  chmod 0600 "$PREFIX/etc/sentinel.json"
+fi
+
 # Quarantine from a downloaded zip makes launchctl bootstrap fail with I/O error.
 xattr -dr com.apple.quarantine "$PREFIX" 2>/dev/null || true
 xattr -dr com.apple.quarantine "$ROOT" 2>/dev/null || true
@@ -122,8 +237,48 @@ launchctl bootstrap system "$PLIST_DST"
 launchctl enable "system/$UNIT_NAME"
 launchctl kickstart -k "system/$UNIT_NAME"
 echo "installed under $PREFIX; launchd job $UNIT_NAME started"
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  echo "watching visible decoy: $WATCH_PATH"
+fi
 echo "Note: Full Disk Access may be required for stronger macOS tiers."
-`, pq, bq, uq)
+`, pq, bq, uq, vq, dq, helpers)
+}
+
+func darwinUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
+	pq := shQuote(prefix)
+	bq := shQuote(binName)
+	uq := shQuote(unitName)
+	vq := shQuote(visibleUnder)
+	dq := shQuote(decoyBase)
+	helpers := unixVisibleShellHelpers()
+	return fmt.Sprintf(`#!/usr/bin/env bash
+# Endpoint helper uninstall (macOS).
+set -euo pipefail
+PREFIX=%s
+BIN_NAME=%s
+UNIT_NAME=%s
+VISIBLE_UNDER=%s
+DECOY_BASE=%s
+PLIST_DST="/Library/LaunchDaemons/$UNIT_NAME.plist"
+%s
+launchctl bootout "system/$UNIT_NAME" 2>/dev/null || true
+rm -f "$PLIST_DST"
+if [[ -n "$VISIBLE_UNDER" ]]; then
+  TARGET_USER="$(stat -f '%%Su' /dev/console 2>/dev/null || true)"
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    TARGET_USER="$(logname 2>/dev/null || true)"
+  fi
+  if [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]]; then
+    HOME_DIR="$(dscl . -read /Users/"$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    if [[ -z "$HOME_DIR" ]]; then
+      HOME_DIR="/Users/$TARGET_USER"
+    fi
+    safe_rm_visible_file "$TARGET_USER" "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
+  fi
+fi
+rm -rf "$PREFIX"
+echo "uninstalled $UNIT_NAME and removed $PREFIX"
+`, pq, bq, uq, vq, dq, helpers)
 }
 
 func darwinPlist(prefix, binName, unitName string) string {
@@ -155,10 +310,13 @@ func darwinPlist(prefix, binName, unitName string) string {
 `, unitName, cfg, bin)
 }
 
-func windowsInstall(prefix, binName, unitName string) string {
+func windowsInstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
 	p := strings.ReplaceAll(prefix, `'`, `''`)
 	b := strings.ReplaceAll(binName, `'`, `''`)
 	u := strings.ReplaceAll(unitName, `'`, `''`)
+	v := strings.ReplaceAll(visibleUnder, `'`, `''`)
+	d := strings.ReplaceAll(decoyBase, `'`, `''`)
+	helpers := windowsVisiblePSHelpers()
 	return fmt.Sprintf(`# Endpoint helper install (Windows). Run elevated.
 # Not a Windows Service binary; install uses a SYSTEM scheduled task.
 # Prefer ScheduledTasks cmdlets over schtasks.exe under $ErrorActionPreference=Stop.
@@ -167,7 +325,10 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Prefix = '%s'
 $BinName = '%s'
 $TaskName = '%s'
+$VisibleUnder = '%s'
+$DecoyBase = '%s'
 $ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
+%s
 $BinSrc = Join-Path $Root ('bin\' + $BinName)
 if (-not (Test-Path -LiteralPath $BinSrc)) {
   throw ("Place {0} in {1}\bin\ first" -f $BinName, $Root)
@@ -199,12 +360,30 @@ Copy-Item -LiteralPath (Join-Path $Root 'etc\sentinel.json') -Destination (Join-
 Copy-Item -LiteralPath $Secret -Destination (Join-Path $Prefix 'etc\ingest.secret') -Force
 Copy-Item -Path (Join-Path $Root 'decoys\*') -Destination (Join-Path $Prefix 'decoys') -Force
 
-# Restrict package tree to local Administrators + SYSTEM.
+# Restrict package tree to local Administrators + SYSTEM (secrets stay private).
 $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Prefix)
 $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Prefix)
 $IngestDst = Join-Path $Prefix 'etc\ingest.secret'
 $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $IngestDst)
 $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" >nul' -f $IngestDst)
+
+$WatchPath = Join-Path $Prefix ('decoys\' + $DecoyBase)
+if ($VisibleUnder -ne '') {
+  $console = (Get-CimInstance Win32_ComputerSystem).UserName
+  $userProfile = Resolve-InteractiveProfile $console
+  $docsRoot = Join-Path $userProfile 'Documents'
+  # Create/copy as the interactive user. SACL is applied by the SYSTEM sentinel at startup
+  # (avoids install-time Set-Acl through a user-writable path).
+  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
+  $WatchPath = Join-Path $VisibleDir $DecoyBase
+  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
+  $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
+  $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
+  $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+  $cfg.targets[0].path = $WatchPath
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)
+}
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
 $Cfg = Join-Path $Prefix 'etc\sentinel.json'
@@ -226,5 +405,51 @@ if (-not (Get-Process -Name $ProcName -ErrorAction SilentlyContinue)) {
   throw ("scheduled task {0} was created but process {1} is not running; check Task Scheduler history" -f $TaskName, $ProcName)
 }
 Write-Host "installed under $Prefix; scheduled task $TaskName started (SYSTEM, AtStartup)"
-`, p, b, u)
+if ($VisibleUnder -ne '') {
+  Write-Host ("watching visible decoy: {0}" -f $WatchPath)
+}
+`, p, b, u, v, d, helpers)
+}
+
+func windowsUninstall(prefix, binName, unitName, visibleUnder, decoyBase string) string {
+	p := strings.ReplaceAll(prefix, `'`, `''`)
+	b := strings.ReplaceAll(binName, `'`, `''`)
+	u := strings.ReplaceAll(unitName, `'`, `''`)
+	v := strings.ReplaceAll(visibleUnder, `'`, `''`)
+	d := strings.ReplaceAll(decoyBase, `'`, `''`)
+	helpers := windowsVisiblePSHelpers()
+	return fmt.Sprintf(`# Endpoint helper uninstall (Windows). Run elevated.
+$ErrorActionPreference = 'Stop'
+$Prefix = '%s'
+$BinName = '%s'
+$TaskName = '%s'
+$VisibleUnder = '%s'
+$DecoyBase = '%s'
+$ProcName = [System.IO.Path]::GetFileNameWithoutExtension($BinName)
+%s
+foreach ($tn in @($TaskName, 'KunariSentinel') | Select-Object -Unique) {
+  if (Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
+  }
+}
+Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$svc = Get-Service -Name KunariSentinel -ErrorAction SilentlyContinue
+if ($svc) {
+  Stop-Service KunariSentinel -Force -ErrorAction SilentlyContinue
+  $null = cmd.exe /c 'sc.exe delete KunariSentinel >nul 2>&1'
+}
+if ($VisibleUnder -ne '') {
+  $console = (Get-CimInstance Win32_ComputerSystem).UserName
+  if (-not [string]::IsNullOrWhiteSpace($console) -and $console -match '\\') {
+    $userProfile = Resolve-InteractiveProfile $console
+    $docsRoot = Join-Path $userProfile 'Documents'
+    Remove-VisibleDecoy $docsRoot ($VisibleUnder + '\' + $DecoyBase) $console
+  }
+}
+if (Test-Path -LiteralPath $Prefix) {
+  Remove-Item -LiteralPath $Prefix -Recurse -Force
+}
+Write-Host ("uninstalled {0} and removed {1}" -f $TaskName, $Prefix)
+`, p, b, u, v, d, helpers)
 }
