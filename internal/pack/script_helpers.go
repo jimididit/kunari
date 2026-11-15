@@ -1,8 +1,9 @@
 package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
-// It refuses symlink components under the user's Documents tree and patches sentinel.json
-// with jq when available, otherwise a sed placeholder replace (no interpreter dependency).
+// Visible-path writes lock the leaf directory as root for the install window (no user
+// symlink plant / predictable temp / root mv into a user-writable name), then restore
+// ownership. sentinel.json is patched with jq or sed (no interpreter dependency).
 func unixVisibleShellHelpers() string {
 	return `
 refuse_if_symlink() {
@@ -13,21 +14,22 @@ refuse_if_symlink() {
   fi
 }
 
-# Create Documents/<rel> component-by-component; refuse symlinks/junctions (TOCTOU hardening).
+# Create Documents/<rel> component-by-component; refuse symlinks.
+# Leaf directories are left root-owned 0755 until install_visible_decoy finishes.
 ensure_visible_dir() {
   local docs_root="$1"
   local rel="$2"
-  local owner="$3"
-  local group="$4"
   refuse_if_symlink "$docs_root"
   if [[ ! -d "$docs_root" ]]; then
-    install -d -m 0755 -o "$owner" -g "$group" "$docs_root"
+    install -d -m 0755 "$docs_root"
   fi
   refuse_if_symlink "$docs_root"
   if [[ ! -d "$docs_root" ]]; then
     echo "error: Documents path is not a directory: $docs_root" >&2
     exit 1
   fi
+  # Prevent rename-swap of our tree under Documents during the elevated write window.
+  chmod u-w "$docs_root" 2>/dev/null || true
   local cur="$docs_root"
   local IFS='/'
   local -a parts
@@ -43,37 +45,87 @@ ensure_visible_dir() {
         exit 1
       fi
     else
-      install -d -m 0755 -o "$owner" -g "$group" "$cur"
+      install -d -m 0755 -o root -g root "$cur"
       refuse_if_symlink "$cur"
     fi
+    chown root:root "$cur"
+    chmod 0755 "$cur"
   done
   printf '%%s' "$cur"
 }
 
-# Install decoy as a regular file only (no symlink replace / follow).
+restore_visible_docs_write() {
+  local docs_root="$1"
+  local owner="$2"
+  local group="$3"
+  local leaf="$4"
+  if [[ -d "$leaf" && ! -L "$leaf" ]]; then
+    chown "$owner:$group" "$leaf" 2>/dev/null || true
+  fi
+  if [[ -d "$docs_root" && ! -L "$docs_root" ]]; then
+    chmod u+w "$docs_root" 2>/dev/null || true
+    # Do not chown Documents; only restore owner write.
+  fi
+}
+
+# Install decoy with no temp name and no mv into a user-writable directory:
+# leaf dir is root-owned, so the unprivileged user cannot plant a symlink race.
 install_visible_decoy() {
   local src="$1"
   local dest="$2"
   local owner="$3"
   local group="$4"
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    refuse_if_symlink "$dest"
+  local dir
+  dir="$(dirname "$dest")"
+  refuse_if_symlink "$dir"
+  if [[ "$(stat -c '%%u' "$dir" 2>/dev/null || stat -f '%%u' "$dir")" != "0" ]]; then
+    chown root:root "$dir"
+    chmod 0755 "$dir"
+  fi
+  if [[ -L "$dest" ]]; then
+    echo "error: refusing symlink decoy: $dest" >&2
+    exit 1
+  fi
+  if [[ -e "$dest" ]]; then
     if [[ ! -f "$dest" ]]; then
       echo "error: visible decoy path exists and is not a regular file: $dest" >&2
       exit 1
     fi
+    rm -f -- "$dest"
   fi
-  local tmp="${dest}.kunari.tmp.$$"
-  install -m 0600 -o "$owner" -g "$group" "$src" "$tmp"
-  if [[ -L "$dest" ]]; then
-    rm -f "$tmp"
-    echo "error: refusing symlink decoy: $dest" >&2
-    exit 1
-  fi
-  mv -f "$tmp" "$dest"
+  # Direct install into root-owned directory (no predictable .tmp, no mv).
+  install -m 0600 -o "$owner" -g "$group" "$src" "$dest"
   refuse_if_symlink "$dest"
   if [[ ! -f "$dest" ]]; then
     echo "error: visible decoy is not a regular file after install: $dest" >&2
+    exit 1
+  fi
+}
+
+# setfacl only on verified regular non-symlink paths; inode must be stable.
+safe_setfacl() {
+  local path="$1"
+  shift
+  refuse_if_symlink "$path"
+  if [[ ! -e "$path" ]]; then
+    echo "error: setfacl target missing: $path" >&2
+    exit 1
+  fi
+  local before after
+  if before="$(stat -c '%%d:%%i' "$path" 2>/dev/null)"; then
+    :
+  else
+    before="$(stat -f '%%d:%%i' "$path")"
+  fi
+  setfacl "$@" "$path"
+  refuse_if_symlink "$path"
+  if after="$(stat -c '%%d:%%i' "$path" 2>/dev/null)"; then
+    :
+  else
+    after="$(stat -f '%%d:%%i' "$path")"
+  fi
+  if [[ "$before" != "$after" ]]; then
+    echo "error: setfacl target changed during update: $path" >&2
     exit 1
   fi
 }
@@ -86,11 +138,18 @@ safe_rm_visible_file() {
     return 0
   fi
   if [[ -f "$target" ]]; then
-    rm -f "$target"
+    rm -f -- "$target"
     return 0
   fi
   if [[ -e "$target" ]]; then
     echo "warning: skipping non-regular visible path: $target" >&2
+  fi
+}
+
+clear_visible_acls() {
+  local path="$1"
+  if [[ -e "$path" && ! -L "$path" ]] && command -v setfacl >/dev/null 2>&1; then
+    setfacl -x "u:kunari" "$path" 2>/dev/null || true
   fi
 }
 
@@ -106,7 +165,6 @@ patch_sentinel_watch() {
     mv "$tmp" "$cfg"
     return 0
   fi
-  # Placeholder is packager-validated (no sed metacharacters beyond /).
   local esc="$watch"
   esc="${esc//\\/\\\\}"
   esc="${esc//\"/\\\"}"
@@ -152,17 +210,31 @@ function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel) {
   }
   return $cur
 }
+function Lock-VisibleDir([string]$Dir) {
+  Assert-NoReparse $Dir
+  # Drop inherited / user write for the elevated copy window.
+  $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Dir)
+  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Dir)
+  Assert-NoReparse $Dir
+}
 function Install-VisibleDecoy([string]$Src, [string]$Dest) {
+  $dir = Split-Path -Parent $Dest
+  Lock-VisibleDir $dir
   if (Test-Path -LiteralPath $Dest) {
     Assert-NoReparse $Dest
     $existing = Get-Item -LiteralPath $Dest -Force
     if ($existing.PSIsContainer) { throw ("visible decoy path is a directory: {0}" -f $Dest) }
+    Remove-Item -LiteralPath $Dest -Force
   }
-  $tmp = "$Dest.kunari.tmp"
-  Copy-Item -LiteralPath $Src -Destination $tmp -Force
-  if (Test-Path -LiteralPath $Dest) { Assert-NoReparse $Dest }
-  Move-Item -LiteralPath $tmp -Destination $Dest -Force
+  # Direct copy into the locked directory (no predictable temp name in the user tree).
+  Copy-Item -LiteralPath $Src -Destination $Dest -Force
   Assert-NoReparse $Dest
+}
+function Grant-VisibleUserRead([string]$Dir, [string]$File, [string]$User) {
+  $null = cmd.exe /c ('icacls "{0}" /grant:r "{1}:(RX)" >nul' -f $Dir, $User)
+  $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
+  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
+  Assert-NoReparse $File
 }
 function Remove-VisibleDecoy([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { return }

@@ -278,10 +278,15 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"Documents",
 		"Assert-NoReparse",
 		"Install-VisibleDecoy",
+		"Lock-VisibleDir",
+		"Grant-VisibleUserRead",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
+	}
+	if strings.Contains(body, ".kunari.tmp") {
+		t.Fatal("windows install must not use a predictable temp decoy path")
 	}
 	if strings.Contains(body, "python3 -") || strings.Contains(body, "python3<<") {
 		t.Fatal("windows install must not invoke python")
@@ -319,10 +324,16 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"install_visible_decoy",
 		"patch_sentinel_watch",
 		"safe_rm_visible_file",
+		"safe_setfacl",
+		"restore_visible_docs_write",
+		"chmod u-w",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.sh missing %q", needle)
 		}
+	}
+	if strings.Contains(body, ".kunari.tmp") {
+		t.Fatal("linux install must not use a predictable temp decoy path")
 	}
 	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
 	if err != nil {

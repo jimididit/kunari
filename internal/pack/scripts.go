@@ -66,18 +66,20 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   fi
   refuse_if_symlink "$HOME_DIR"
   DOCS_ROOT="$HOME_DIR/Documents"
-  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER" "$TARGET_USER")"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
   install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" "$TARGET_USER"
   # Grant service user read on the decoy and traverse on parents (Documents homes are often 0700).
   if command -v setfacl >/dev/null 2>&1; then
     cur="$WATCH_PATH"
     while [[ "$cur" != "/" && "$cur" != "$HOME_DIR" ]]; do
-      setfacl -m "u:kunari:x" "$cur" 2>/dev/null || true
+      if [[ -e "$cur" ]]; then
+        safe_setfacl "$cur" -m "u:kunari:x" || true
+      fi
       cur="$(dirname "$cur")"
     done
-    setfacl -m "u:kunari:x" "$HOME_DIR" 2>/dev/null || true
-    setfacl -m "u:kunari:r" "$WATCH_PATH" || {
+    safe_setfacl "$HOME_DIR" -m "u:kunari:x" || true
+    safe_setfacl "$WATCH_PATH" -m "u:kunari:r" || {
       echo "error: setfacl failed granting kunari read on $WATCH_PATH" >&2
       exit 1
     }
@@ -85,6 +87,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     echo "error: setfacl required for --visible-under on Linux so user kunari can read $WATCH_PATH" >&2
     exit 1
   fi
+  restore_visible_docs_write "$DOCS_ROOT" "$TARGET_USER" "$TARGET_USER" "$VISIBLE_DIR"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
@@ -134,7 +137,12 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   if [[ -n "$TARGET_USER" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
     if [[ -n "$HOME_DIR" ]]; then
-      safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+      VIS="$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+      clear_visible_acls "$VIS"
+      clear_visible_acls "$HOME_DIR/Documents/$VISIBLE_UNDER"
+      clear_visible_acls "$HOME_DIR/Documents"
+      clear_visible_acls "$HOME_DIR"
+      safe_rm_visible_file "$VIS"
     fi
   fi
 fi
@@ -223,9 +231,10 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   fi
   refuse_if_symlink "$HOME_DIR"
   DOCS_ROOT="$HOME_DIR/Documents"
-  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER" staff)"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
   install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" staff
+  restore_visible_docs_write "$DOCS_ROOT" "$TARGET_USER" staff "$VISIBLE_DIR"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chmod 0600 "$PREFIX/etc/sentinel.json"
@@ -392,9 +401,8 @@ if ($VisibleUnder -ne '') {
   $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder
   $WatchPath = Join-Path $VisibleDir $DecoyBase
   Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath
-  # Intended user may open/read the decoy; keep write limited to SYSTEM/Administrators.
-  $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $WatchPath)
-  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $WatchPath, $console)
+  # Intended user may open/read the decoy; write stays with SYSTEM/Administrators.
+  Grant-VisibleUserRead $VisibleDir $WatchPath $console
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
   $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
   $cfg.targets[0].path = $WatchPath
