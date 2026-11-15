@@ -37,6 +37,7 @@
   var lastSeq = 0;
   var wantLive = false;
   var eventRows = []; // keep for refilter
+  var drawerReq = 0;
 
   function token() {
     return sessionStorage.getItem(STORAGE_KEY) || "";
@@ -275,6 +276,8 @@
 
   function openAgentDrawer(a) {
     if (!a || !a.id) return;
+    var req = ++drawerReq;
+    var agentID = a.id;
     setDrawerMeta(a);
     agentDrawer.classList.remove("hidden");
     drawerEmpty.classList.add("hidden");
@@ -282,16 +285,18 @@
     var local = [];
     for (var i = 0; i < eventRows.length; i++) {
       var ev = eventRows[i];
-      if (!ev || !ev.host || ev.host.id !== a.id) continue;
+      if (!ev || !ev.host || ev.host.id !== agentID) continue;
       if (ev.token_id === "heartbeat" || ev.action === "heartbeat") continue;
       local.push(ev);
     }
     if (local.length) renderDrawerEvents(local.slice(0, 40));
-    api("/api/v1/events?host_id=" + encodeURIComponent(a.id) + "&exclude_heartbeats=1&limit=40")
+    api("/api/v1/events?host_id=" + encodeURIComponent(agentID) + "&exclude_heartbeats=1&limit=40")
       .then(function (data) {
+        if (req !== drawerReq) return;
         renderDrawerEvents((data && data.events) || []);
       })
       .catch(function () {
+        if (req !== drawerReq) return;
         if (!local.length) renderDrawerEvents([]);
       });
   }

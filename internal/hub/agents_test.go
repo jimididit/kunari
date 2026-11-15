@@ -46,6 +46,27 @@ func TestAgentTrackerMissingAndRecovery(t *testing.T) {
 	}
 }
 
+func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-n", Hostname: "n", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	if tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("fresh agent should not need missing alert")
+	}
+	_ = tr.CheckMissing(time.Now().UTC().Add(2 * time.Minute))
+	if !tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("stale unalerted agent should need missing alert")
+	}
+	tr.MarkMissingAlerted("agent-n")
+	if tr.NeedsMissingAlert("agent-n") {
+		t.Fatal("alerted missing agent should not need another alert")
+	}
+}
+
 func TestAgentTrackerRetire(t *testing.T) {
 	dir := t.TempDir()
 	tr, err := newAgentTracker(dir, time.Minute)

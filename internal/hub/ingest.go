@@ -126,16 +126,21 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 	// Only token_id identifies control-plane heartbeats. Do not trust action alone:
 	// a signed ingest with action=heartbeat on a real token must still alert.
 	if ev.TokenID == "heartbeat" {
-		recovered := h.agents.NoteHeartbeat(ev)
+		// Hold agentMu so missing/recovered emits cannot interleave with this heartbeat.
+		// Append before NoteHeartbeat so a failed chain write does not clear Missing
+		// and drop the recovery transition on retry.
+		h.agentMu.Lock()
+		defer h.agentMu.Unlock()
 		if err := h.chain.Append(ev); err != nil {
 			return err
 		}
+		recovered := h.agents.NoteHeartbeat(ev)
 		// Heartbeats are control-plane: record + track, do not alert/SSE flood.
 		h.mu.Lock()
 		h.hits++
 		h.mu.Unlock()
 		if recovered {
-			h.emitAgentRecovered(ev)
+			h.emitAgentRecoveredLocked(ev)
 		}
 		return nil
 	}
@@ -201,7 +206,13 @@ func (h *Hub) watchAgents(ctx context.Context) {
 }
 
 func (h *Hub) emitMissingAgents(now time.Time) {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
 	for _, rec := range h.agents.CheckMissing(now) {
+		// Re-check under agentMu: a heartbeat may have cleared Missing since the snapshot.
+		if !h.agents.NeedsMissingAlert(rec.ID) {
+			continue
+		}
 		tier := rec.Tier
 		if tier == "" {
 			tier = "agent-watch"
@@ -235,7 +246,8 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 	}
 }
 
-func (h *Hub) emitAgentRecovered(hb *event.Event) {
+// emitAgentRecoveredLocked requires h.agentMu held by the caller.
+func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) {
 	ev := event.New("agent_status", "hub", "agent-watch", "agent_recovered")
 	ev.Memo = "sentinel heartbeat resumed"
 	if hb != nil && hb.Host != nil {

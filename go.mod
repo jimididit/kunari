@@ -1,6 +1,6 @@
 module github.com/jimididit/kunari
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/fredwangwang/etw v0.0.0-20260816132252-425a709d8824

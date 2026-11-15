@@ -53,6 +53,7 @@ type Hub struct {
 	agents         *agentTracker
 	trustedProxies []*net.IPNet
 	mu             sync.Mutex
+	agentMu        sync.Mutex // serializes missing vs recovered agent emits
 	hits           int
 	alerts         int // non-heartbeat operator-visible alerts
 }

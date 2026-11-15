@@ -180,6 +180,17 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	return out
 }
 
+// NeedsMissingAlert reports whether id is still missing and has not been alerted.
+func (t *agentTracker) NeedsMissingAlert(id string) bool {
+	if t == nil || id == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	return rec != nil && !rec.Retired && rec.Missing && !rec.MissingAlerted
+}
+
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
