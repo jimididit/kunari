@@ -542,11 +542,16 @@ func (s *jobStore) persistLocked() error {
 }
 
 func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
+	// Unique temp name avoids clobbering concurrent writers to the same path.
+	tmp := fmt.Sprintf("%s.%d.%d.tmp", path, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
@@ -623,7 +628,7 @@ func jobSignPayload(j *Job) ([]byte, error) {
 	exp := strconv.FormatInt(j.ExpiresAt.UTC().UnixMicro(), 10)
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
-		n := len(s)
+		n := uint64(len(s))
 		if n > math.MaxUint32 {
 			return fmt.Errorf("sign field too large")
 		}

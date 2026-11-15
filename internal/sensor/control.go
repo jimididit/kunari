@@ -245,7 +245,7 @@ func jobSignPayload(id, agentID, verb string, args json.RawMessage, exp time.Tim
 	expMicro := strconv.FormatInt(exp.UTC().UnixMicro(), 10)
 	var buf bytes.Buffer
 	writeLP := func(s string) error {
-		n := len(s)
+		n := uint64(len(s))
 		if n > math.MaxUint32 {
 			return fmt.Errorf("sign field too large")
 		}

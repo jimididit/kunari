@@ -334,14 +334,10 @@ func (t *agentTracker) AckMissing(id string) error {
 	if !stale {
 		return fmt.Errorf("agent not missing")
 	}
-	// Keep MissingAlerted as-is unless an in-flight claim exists: promote the claim
-	// so a concurrent durable emit still pairs with agent_recovered later.
+	// Keep MissingAlerted and alertClaimed as-is. MarkMissingAlerted (after a
+	// durable emit) sets MissingAlerted even when OperatorAcked; Abort only
+	// clears the memory claim so a failed emit cannot forge agent_recovered.
 	prevMissing, prevAcked, prevRecover := rec.Missing, rec.OperatorAcked, rec.RecoverPending
-	prevAlerted, prevClaimed := rec.MissingAlerted, rec.alertClaimed
-	if rec.alertClaimed {
-		rec.MissingAlerted = true
-		rec.alertClaimed = false
-	}
 	rec.Missing = false
 	rec.OperatorAcked = true
 	rec.RecoverPending = false
@@ -349,8 +345,6 @@ func (t *agentTracker) AckMissing(id string) error {
 		rec.Missing = prevMissing
 		rec.OperatorAcked = prevAcked
 		rec.RecoverPending = prevRecover
-		rec.MissingAlerted = prevAlerted
-		rec.alertClaimed = prevClaimed
 		t.lastErr = err.Error()
 		return err
 	}
@@ -529,9 +523,5 @@ func (t *agentTracker) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := t.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, t.path)
+	return writeFileAtomic(t.path, b)
 }
