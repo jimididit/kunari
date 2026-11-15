@@ -7,21 +7,26 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const event4663SeenCap = 4096
+const event4663MaxIDFile = "win-sacl-4663.max_record_id"
 
 type event4663Watcher struct {
-	targets []Target
-	hash    string
-	seen    map[string]struct{}
-	seenQ   []string
-	started time.Time
+	targets   []Target
+	hash      string
+	seen      map[string]struct{}
+	seenQ     []string
+	statePath string
+	maxID     uint64
+	haveMax   bool // true after restore or cold-start seed
 }
 
 func newEvent4663(targets []Target) (*event4663Watcher, error) {
@@ -40,8 +45,38 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 		targets: targets,
 		hash:    hex.EncodeToString(sum[:]),
 		seen:    map[string]struct{}{},
-		started: time.Now().UTC(),
 	}, nil
+}
+
+// RestoreSeen loads the last emitted EventRecordID from dataDir so restarts
+// re-emit touches that happened while the sensor was down, without replaying
+// the entire Security log window.
+func (w *event4663Watcher) RestoreSeen(dir string) error {
+	if w == nil || strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	w.statePath = filepath.Join(dir, event4663MaxIDFile)
+	b, err := os.ReadFile(w.statePath) // #nosec G304 -- path under sentinel data_dir
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	id, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return nil
+	}
+	w.maxID = id
+	w.haveMax = true
+	return nil
+}
+
+func (w *event4663Watcher) persistMaxID() {
+	if w.statePath == "" || !w.haveMax {
+		return
+	}
+	_ = os.WriteFile(w.statePath, []byte(strconv.FormatUint(w.maxID, 10)+"\n"), 0o600)
 }
 
 // ensureFileSystemAuditACE enables File System success auditing and attaches a
@@ -91,8 +126,6 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	// Accept a small clock skew so touches during startup still emit.
-	floor := w.started.Add(-2 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,30 +135,75 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 			if err != nil {
 				continue
 			}
-			for _, touch := range parse4663(raw, w.targets) {
+			touches := parse4663(raw, w.targets)
+			if !w.haveMax {
+				// Cold start: advance watermark to the current window without emitting.
+				for _, touch := range touches {
+					if id, ok := parseRecordID(touch); ok && id > w.maxID {
+						w.maxID = id
+					}
+					if touch.Extra != nil {
+						_ = w.rememberRecord(touch.Extra["event_record_id"])
+					}
+				}
+				w.haveMax = true
+				w.persistMaxID()
+				continue
+			}
+			baseline := w.maxID
+			type pendingTouch struct {
+				id    uint64
+				touch Touch
+			}
+			var pending []pendingTouch
+			for _, touch := range touches {
 				key := ""
 				if touch.Extra != nil {
 					key = touch.Extra["event_record_id"]
 				}
 				if key == "" {
-					// Should not happen with XML queries; skip rather than path-dedupe forever.
 					continue
 				}
 				if w.rememberRecord(key) {
 					continue
 				}
-				// Remember historical Security log rows without re-alerting on restart.
-				if created, ok := touchEventTime(touch); ok && created.Before(floor) {
+				id, ok := parseRecordID(touch)
+				if !ok || id <= baseline {
 					continue
 				}
+				pending = append(pending, pendingTouch{id: id, touch: touch})
+				if id > w.maxID {
+					w.maxID = id
+				}
+			}
+			sort.Slice(pending, func(i, j int) bool { return pending[i].id < pending[j].id })
+			if len(pending) > 0 {
+				w.persistMaxID()
+			}
+			for _, p := range pending {
 				select {
-				case out <- touch:
+				case out <- p.touch:
 				case <-ctx.Done():
 					return nil
 				}
 			}
 		}
 	}
+}
+
+func parseRecordID(t Touch) (uint64, bool) {
+	if t.Extra == nil {
+		return 0, false
+	}
+	raw := strings.TrimSpace(t.Extra["event_record_id"])
+	if raw == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 func touchEventTime(t Touch) (time.Time, bool) {

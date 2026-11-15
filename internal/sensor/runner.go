@@ -81,6 +81,11 @@ func NewRunner(cfg *Config, log *slog.Logger) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if restorer, ok := w.(interface{ RestoreSeen(string) error }); ok {
+		if err := restorer.RestoreSeen(cfg.DataDir); err != nil {
+			log.Debug("watcher seen-state restore", "err", err)
+		}
+	}
 	byPath := map[string]Target{}
 	for _, t := range cfg.Targets {
 		byPath[filepath.Clean(t.Path)] = t

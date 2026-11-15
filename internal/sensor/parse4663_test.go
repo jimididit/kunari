@@ -3,6 +3,8 @@
 package sensor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -163,6 +165,21 @@ func TestRememberRecordAllowsRepeatReads(t *testing.T) {
 	}
 	if w.rememberRecord("2") {
 		t.Fatal("different record id should be new (repeat read)")
+	}
+}
+
+func TestRestoreSeenLoadsMaxRecordID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, event4663MaxIDFile)
+	if err := os.WriteFile(path, []byte("42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := &event4663Watcher{seen: map[string]struct{}{}}
+	if err := w.RestoreSeen(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !w.haveMax || w.maxID != 42 {
+		t.Fatalf("haveMax=%v maxID=%d", w.haveMax, w.maxID)
 	}
 }
 
