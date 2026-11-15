@@ -1,10 +1,10 @@
 package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
-// Visible decoys are created/copied as the interactive user (no root write into a
-// user-writable tree). Linux hardlinks the decoy into the private prefix so the
-// service can watch/read it without joining the user's group. sentinel.json
-// patches require jq.
+// Visible decoys are created/copied as the interactive user (no root/SYSTEM write
+// into a user-writable tree). Linux grants the service read via setfacl run as the
+// owner. Windows SACL is applied by the sentinel at startup, not by install.
+// sentinel.json patches require jq.
 func unixVisibleShellHelpers() string {
 	// NOTE: this string is inserted via fmt %s and is NOT re-parsed as a format
 	// string, so keep single "%" for shell printf/stat formats.
@@ -81,21 +81,59 @@ install_visible_decoy() {
       exit 1
       ;;
   esac
-  if [[ -L "$dest" ]]; then
-    echo "error: refusing symlink decoy: $dest" >&2
-    exit 1
-  fi
-  if [[ -e "$dest" && ! -f "$dest" ]]; then
-    echo "error: visible decoy path exists and is not a regular file: $dest" >&2
-    exit 1
-  fi
   chmod a+r "$src" 2>/dev/null || true
-  run_as_user "$owner" cp -f "$src" "$dest"
-  run_as_user "$owner" chmod 600 "$dest"
-  refuse_if_symlink "$dest"
-  if [[ ! -f "$dest" ]]; then
-    echo "error: visible decoy is not a regular file after install: $dest" >&2
+  # Single user-owned shell avoids check/cp races following a swapped symlink dest.
+  run_as_user "$owner" bash -c '
+    set -euo pipefail
+    dest="$1"
+    src="$2"
+    if [[ -L "$dest" ]]; then
+      echo "error: refusing symlink decoy: $dest" >&2
+      exit 1
+    fi
+    if [[ -e "$dest" && ! -f "$dest" ]]; then
+      echo "error: visible decoy path exists and is not a regular file: $dest" >&2
+      exit 1
+    fi
+    tmp="${dest}.kunari.new.$$"
+    cp -f -- "$src" "$tmp"
+    if [[ -L "$dest" ]]; then
+      rm -f -- "$tmp"
+      echo "error: refusing symlink decoy: $dest" >&2
+      exit 1
+    fi
+    mv -f -- "$tmp" "$dest"
+    if [[ -L "$dest" || ! -f "$dest" ]]; then
+      echo "error: visible decoy is not a regular file after install: $dest" >&2
+      exit 1
+    fi
+    chmod 600 -- "$dest"
+  ' bash "$dest" "$src"
+}
+
+# Owner-applied ACL so kunari can read/traverse without root setfacl or group join.
+grant_kunari_acl_as_user() {
+  local owner="$1"
+  local home_dir="$2"
+  local watch_path="$3"
+  if ! command -v setfacl >/dev/null 2>&1; then
+    echo "error: setfacl required for --visible-under on Linux" >&2
     exit 1
+  fi
+  refuse_if_symlink "$watch_path"
+  run_as_user "$owner" setfacl -m "u:kunari:r" "$watch_path"
+  local cur
+  cur="$(dirname "$watch_path")"
+  while [[ "$cur" != "/" && "$cur" != "$home_dir" ]]; do
+    refuse_if_symlink "$cur"
+    run_as_user "$owner" setfacl -m "u:kunari:x" "$cur" || true
+    cur="$(dirname "$cur")"
+  done
+  refuse_if_symlink "$home_dir"
+  run_as_user "$owner" setfacl -m "u:kunari:x" "$home_dir" || true
+  if [[ -d "$home_dir/Documents" ]]; then
+    refuse_if_symlink "$home_dir/Documents"
+    run_as_user "$owner" setfacl -m "u:kunari:x" "$home_dir/Documents" || true
   fi
 }
 
@@ -225,8 +263,16 @@ function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel, [string]$User) 
     ('New-Item -ItemType Directory -Force -Path ''{0}'' | Out-Null' -f $dirLit)
   ) -join [Environment]::NewLine
   Invoke-AsInteractiveUser $User $scriptBody
+  # Reject reparse points on Documents and every intermediate component.
   Assert-NoReparse $DocumentsRoot
-  Assert-NoReparse $dir
+  $cur = $DocumentsRoot
+  foreach ($part in ($Rel -split '[\\/]+')) {
+    if ([string]::IsNullOrWhiteSpace($part)) { continue }
+    $cur = Join-Path $cur $part
+    Assert-NoReparse $cur
+    $it = Get-Item -LiteralPath $cur -Force
+    if (-not $it.PSIsContainer) { throw ("not a directory: {0}" -f $cur) }
+  }
   if (-not (Test-Path -LiteralPath $dir)) {
     throw ("visible directory was not created: {0}" -f $dir)
   }
@@ -254,16 +300,6 @@ function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User) {
   if (-not (Test-Path -LiteralPath $Dest)) {
     throw ("visible decoy was not installed: {0}" -f $Dest)
   }
-}
-function Apply-VisibleSACL([string]$Path) {
-  Assert-NoReparse $Path
-  $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
-  $acl = Get-Acl -Path $Path -Audit
-  $rule = New-Object System.Security.AccessControl.FileSystemAuditRule(
-    'Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success')
-  $acl.AddAuditRule($rule)
-  Set-Acl -Path $Path -AclObject $acl
-  Assert-NoReparse $Path
 }
 function Remove-VisibleDecoy([string]$DocumentsRoot, [string]$RelFile, [string]$User) {
   if ([string]::IsNullOrWhiteSpace($DocumentsRoot) -or [string]::IsNullOrWhiteSpace($RelFile)) { return }

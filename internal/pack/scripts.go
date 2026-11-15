@@ -70,13 +70,9 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
   VISIBLE_PATH="$VISIBLE_DIR/$DECOY_BASE"
   install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$VISIBLE_PATH" "$TARGET_USER"
-  # Hardlink into the private prefix so the service can watch/read without joining the user's group.
-  rm -f -- "$PREFIX/decoys/$DECOY_BASE"
-  if ! ln "$VISIBLE_PATH" "$PREFIX/decoys/$DECOY_BASE"; then
-    echo "error: hardlink failed; Documents and $PREFIX must be on the same filesystem" >&2
-    exit 1
-  fi
-  WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
+  # Grant kunari access via owner-applied setfacl (no root hardlink / root setfacl).
+  grant_kunari_acl_as_user "$TARGET_USER" "$HOME_DIR" "$VISIBLE_PATH"
+  WATCH_PATH="$VISIBLE_PATH"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
@@ -93,7 +89,7 @@ systemctl daemon-reload
 systemctl enable --now "$UNIT_FILE"
 echo "installed under $PREFIX; service $UNIT_NAME started"
 if [[ -n "$VISIBLE_UNDER" ]]; then
-  echo "visible decoy: $VISIBLE_PATH (hardlinked; sentinel watches $WATCH_PATH)"
+  echo "watching visible decoy: $WATCH_PATH"
 fi
 `, pq, bq, uq, vq, dq, helpers)
 }
@@ -376,23 +372,14 @@ if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
   $userProfile = Resolve-InteractiveProfile $console
   $docsRoot = Join-Path $userProfile 'Documents'
-  # Create/copy as the interactive user (no SYSTEM writes into Documents).
+  # Create/copy as the interactive user. SACL is applied by the SYSTEM sentinel at startup
+  # (avoids install-time Set-Acl through a user-writable path).
   $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
   $WatchPath = Join-Path $VisibleDir $DecoyBase
   Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
-  # Hardlink into the private prefix; apply SACL there (not via a user-writable parent).
-  $PrefixDecoy = Join-Path $Prefix ('decoys\' + $DecoyBase)
-  if (Test-Path -LiteralPath $PrefixDecoy) {
-    Remove-Item -LiteralPath $PrefixDecoy -Force
-  }
-  $null = cmd.exe /c ('mklink /H "{0}" "{1}"' -f $PrefixDecoy, $WatchPath)
-  if (-not (Test-Path -LiteralPath $PrefixDecoy)) {
-    throw ("hardlink failed; Documents and {0} must be on the same volume" -f $Prefix)
-  }
-  Apply-VisibleSACL $PrefixDecoy
+  $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
   $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
-  # Watch the Documents path so 4663 ObjectName matches the user's open.
   $cfg.targets[0].path = $WatchPath
   $utf8 = New-Object System.Text.UTF8Encoding $false
   [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)

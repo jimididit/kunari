@@ -272,21 +272,23 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 	body := string(ps1)
 	for _, needle := range []string{
 		"$VisibleUnder = 'Work\\Finance'",
-		"FileSystemAuditRule",
 		"ConvertFrom-Json",
 		"Documents",
 		"Assert-NoReparse",
 		"Install-VisibleDecoy",
 		"Invoke-AsInteractiveUser",
-		"Apply-VisibleSACL",
 		"Resolve-InteractiveProfile",
 		"UTF8Encoding",
-		"mklink /H",
 		"Authenticated Users:R",
+		"auditpol /set",
+		"SACL is applied by the SYSTEM sentinel",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "Apply-VisibleSACL") || strings.Contains(body, "mklink /H") {
+		t.Fatal("windows visible install must not hardlink or Set-Acl user Documents paths")
 	}
 	if strings.Contains(body, "Lock-VisibleDir") || strings.Contains(body, "takeown") {
 		t.Fatal("windows visible install must not takeown/lock user Documents as SYSTEM")
@@ -339,7 +341,7 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"run_as_user",
 		"jq is required",
 		"printf '%s'",
-		"hardlink",
+		"grant_kunari_acl_as_user",
 		"SUDO_USER",
 		"refusing to guess",
 	} {
@@ -350,6 +352,9 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 	if strings.Contains(body, "SupplementaryGroups=") {
 		t.Fatal("linux visible install must not join the interactive user's group")
 	}
+	if strings.Contains(body, "\n  ln ") || strings.Contains(body, " ln \"") {
+		t.Fatal("linux visible install must not hardlink user Documents paths as root")
+	}
 	if strings.Contains(body, "awk -F:") {
 		t.Fatal("linux visible install must not guess an arbitrary uid>=1000 user")
 	}
@@ -359,8 +364,11 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 	if strings.Contains(body, "sed \"s|") {
 		t.Fatal("linux visible install must not use sed to patch sentinel.json")
 	}
-	if strings.Contains(body, "setfacl -") || strings.Contains(body, "command -v setfacl") {
-		t.Fatal("linux visible install must not invoke setfacl on user paths")
+	if !strings.Contains(body, `run_as_user "$owner" setfacl`) {
+		t.Fatal("linux visible install must apply setfacl as the file owner, not root")
+	}
+	if strings.Contains(body, "\n  setfacl ") || strings.Contains(body, "\nsetfacl ") {
+		t.Fatal("linux visible install must not invoke setfacl as root on user paths")
 	}
 	if strings.Contains(body, "chown root:root") {
 		t.Fatal("linux visible install must not chown user tree to root")
