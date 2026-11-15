@@ -23,12 +23,12 @@ func (h *Hub) routes() http.Handler {
 			"ts":     time.Now().UTC(),
 		})
 	})
-	mux.HandleFunc("GET /b/{token}", h.limitPublic(h.beaconLimit, h.handleBeacon))
-	mux.HandleFunc("HEAD /b/{token}", h.limitPublic(h.beaconLimit, h.handleBeacon))
-	mux.HandleFunc("POST /api/v1/ingest", h.limitPublic(h.ingestLimit, h.handleIngest))
-	// Agent job transport: ingest HMAC (same trust domain as /api/v1/ingest), not operator bearer.
-	mux.HandleFunc("POST /api/v1/jobs/pull", h.limitPublic(h.ingestLimit, h.requireIngestHMACAuth(h.handleJobPull)))
-	mux.HandleFunc("POST /api/v1/jobs/result", h.limitPublic(h.ingestLimit, h.requireIngestHMACAuth(h.handleJobResult)))
+	mux.HandleFunc("GET /b/{token}", h.handleBeacon)
+	mux.HandleFunc("HEAD /b/{token}", h.handleBeacon)
+	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
+	// Agent job transport: ingest HMAC first, then per-IP rate limit (auth before bucket).
+	mux.HandleFunc("POST /api/v1/jobs/pull", h.requireIngestHMACAuth(h.limitPublic(h.ingestLimit, h.handleJobPull)))
+	mux.HandleFunc("POST /api/v1/jobs/result", h.requireIngestHMACAuth(h.limitPublic(h.ingestLimit, h.handleJobResult)))
 	mux.HandleFunc("GET /api/v1/events", h.requireAPIAuth(false, h.handleListEvents))
 	mux.HandleFunc("GET /api/v1/events/stream", h.requireAPIAuth(true, h.handleEventStream))
 	mux.HandleFunc("GET /api/v1/status", h.requireAPIAuth(false, h.handleOperatorStatus))
@@ -61,9 +61,20 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Always record the hit (detection). Rate limit only the success response so
+	// abuse resistance does not silently drop tripwire events.
+	allowed := true
+	var retry time.Duration
+	if h.beaconLimit != nil {
+		allowed, retry = h.beaconLimit.allow(h.clientIP(r))
+	}
 	if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
 		h.log.Error("record beacon", "err", err)
 		http.Error(w, "error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		writeTooManyRequests(w, retry)
 		return
 	}
 	// 1x1 transparent GIF

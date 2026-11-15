@@ -89,6 +89,11 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Rate limit only after HMAC so unauthenticated floods cannot burn the bucket.
+	if ok, retry := h.allowIngestRate(r); !ok {
+		writeTooManyRequests(w, retry)
+		return
+	}
 
 	var ev event.Event
 	if err := json.Unmarshal(body, &ev); err != nil {

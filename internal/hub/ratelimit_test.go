@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +15,8 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	}
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
+	lim.global.last = base
+	lim.global.tokens = lim.globalBurst
 
 	if ok, _ := lim.allow("1.2.3.4"); !ok {
 		t.Fatal("first allow")
@@ -28,7 +31,7 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	if retry < time.Second {
 		t.Fatalf("retry-after too small: %v", retry)
 	}
-	// Other IP unaffected.
+	// Other IP unaffected (per-IP), still under global.
 	if ok, _ := lim.allow("9.9.9.9"); !ok {
 		t.Fatal("other IP must allow")
 	}
@@ -36,6 +39,24 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	lim.now = func() time.Time { return base.Add(60 * time.Second) }
 	if ok, _ := lim.allow("1.2.3.4"); !ok {
 		t.Fatal("expected allow after refill")
+	}
+}
+
+func TestIPRateLimiterGlobalBackstop(t *testing.T) {
+	lim := newIPRateLimiter(1)
+	base := time.Unix(1_700_000_000, 0).UTC()
+	lim.now = func() time.Time { return base }
+	lim.global.last = base
+	lim.global.tokens = 2 // tiny global for test
+	lim.globalBurst = 2
+	lim.globalRatePerSec = 0
+	for i := 0; i < 2; i++ {
+		if ok, _ := lim.allow(fmt.Sprintf("ip-%d", i)); !ok {
+			t.Fatalf("allow %d", i)
+		}
+	}
+	if ok, _ := lim.allow("ip-z"); ok {
+		t.Fatal("global backstop must deny")
 	}
 }
 
@@ -49,14 +70,16 @@ func TestIPRateLimiterDisabled(t *testing.T) {
 }
 
 func TestLimitPublicReturns429(t *testing.T) {
-	h := &Hub{beaconLimit: newIPRateLimiter(1)}
-	h.beaconLimit.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	h := &Hub{ingestLimit: newIPRateLimiter(1)}
+	h.ingestLimit.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	h.ingestLimit.global.last = h.ingestLimit.now()
+	h.ingestLimit.global.tokens = h.ingestLimit.globalBurst
 	var hits int
-	handler := h.limitPublic(h.beaconLimit, func(w http.ResponseWriter, r *http.Request) {
+	handler := h.limitPublic(h.ingestLimit, func(w http.ResponseWriter, r *http.Request) {
 		hits++
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/b/tok", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/pull", nil)
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -73,5 +96,23 @@ func TestLimitPublicReturns429(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("handler must not run on 429: hits=%d", hits)
+	}
+}
+
+func TestEvictOneIsBounded(t *testing.T) {
+	lim := newIPRateLimiter(60)
+	lim.maxKeys = 3
+	base := time.Unix(1_700_000_000, 0).UTC()
+	lim.now = func() time.Time { return base }
+	lim.global.last = base
+	lim.global.tokens = lim.globalBurst
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("k%d", i)
+		if ok, _ := lim.allow(key); !ok {
+			t.Fatalf("allow %s", key)
+		}
+	}
+	if len(lim.buckets) > lim.maxKeys {
+		t.Fatalf("buckets grew past max: %d", len(lim.buckets))
 	}
 }
