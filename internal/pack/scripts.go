@@ -129,7 +129,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   if [[ -n "$TARGET_USER" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
     if [[ -n "$HOME_DIR" ]]; then
-      safe_rm_visible_file "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
+      safe_rm_visible_file "$TARGET_USER" "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
     fi
   fi
 fi
@@ -278,7 +278,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     if [[ -z "$HOME_DIR" ]]; then
       HOME_DIR="/Users/$TARGET_USER"
     fi
-    safe_rm_visible_file "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
+    safe_rm_visible_file "$TARGET_USER" "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
   fi
 fi
 rm -rf "$PREFIX"
@@ -377,25 +377,31 @@ if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
   $userProfile = Resolve-InteractiveProfile $console
   $docsRoot = Join-Path $userProfile 'Documents'
-  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
-  $WatchPath = Join-Path $VisibleDir $DecoyBase
-  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console $docsRoot
-  # Restore Documents write for the user; decoy file stays user-readable only.
-  Grant-VisibleUserRead $docsRoot $VisibleDir $WatchPath $console
-  $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
-  $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
-  $cfg.targets[0].path = $WatchPath
-  $cfgTmp = Join-Path $env:TEMP ('kunari-sentinel-' + [guid]::NewGuid().ToString() + '.json')
-  ($cfg | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $cfgTmp -Encoding utf8
-  Copy-Item -LiteralPath $cfgTmp -Destination $cfgPath -Force
-  Remove-Item -LiteralPath $cfgTmp -Force -ErrorAction SilentlyContinue
-  # Enable object-access auditing and attach SACL so win-sacl-4663 sees open/read.
-  $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
-  $acl = Get-Acl -Path $WatchPath -Audit
-  $rule = New-Object System.Security.AccessControl.FileSystemAuditRule(
-    'Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success')
-  $acl.AddAuditRule($rule)
-  Set-Acl -Path $WatchPath -AclObject $acl
+  $VisibleDir = $null
+  $WatchPath = $null
+  try {
+    $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
+    $WatchPath = Join-Path $VisibleDir $DecoyBase
+    Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console $docsRoot
+    # Restore Documents + intermediate dirs; decoy file stays user-readable only.
+    Grant-VisibleUserRead $docsRoot $VisibleUnder $WatchPath $console
+    $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
+    $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+    $cfg.targets[0].path = $WatchPath
+    # UTF-8 without BOM (Windows PowerShell's utf8 encoding writes a BOM).
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)
+    # Enable object-access auditing and attach SACL so win-sacl-4663 sees open/read.
+    $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
+    $acl = Get-Acl -Path $WatchPath -Audit
+    $rule = New-Object System.Security.AccessControl.FileSystemAuditRule(
+      'Everyone','ReadData,WriteData,Delete,ReadAttributes','None','None','Success')
+    $acl.AddAuditRule($rule)
+    Set-Acl -Path $WatchPath -AclObject $acl
+  } catch {
+    try { Unlock-VisibleTree $docsRoot $VisibleUnder $WatchPath $console } catch {}
+    throw
+  }
 }
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
@@ -457,7 +463,7 @@ if ($VisibleUnder -ne '') {
   if (-not [string]::IsNullOrWhiteSpace($console) -and $console -match '\\') {
     $userProfile = Resolve-InteractiveProfile $console
     $docsRoot = Join-Path $userProfile 'Documents'
-    Remove-VisibleDecoy $docsRoot ($VisibleUnder + '\' + $DecoyBase)
+    Remove-VisibleDecoy $docsRoot ($VisibleUnder + '\' + $DecoyBase) $console
   }
 }
 if (Test-Path -LiteralPath $Prefix) {

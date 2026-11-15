@@ -118,11 +118,12 @@ grant_group_read_path() {
   fi
 }
 
-# Elevated uninstall: walk docs_root/rel and refuse any symlink component before rm.
+# Elevated uninstall: walk docs_root/rel, refuse symlink components, delete as the user.
 safe_rm_visible_file() {
-  local docs_root="$1"
-  local rel="$2"
-  if [[ -z "$docs_root" || -z "$rel" ]]; then
+  local owner="$1"
+  local docs_root="$2"
+  local rel="$3"
+  if [[ -z "$owner" || -z "$docs_root" || -z "$rel" ]]; then
     return 0
   fi
   if [[ -L "$docs_root" || ! -d "$docs_root" ]]; then
@@ -143,7 +144,8 @@ safe_rm_visible_file() {
     fi
   done
   if [[ -f "$cur" ]]; then
-    rm -f -- "$cur"
+    # Delete as the owner so a swapped symlink cannot redirect a root rm.
+    run_as_user "$owner" rm -f -- "$cur"
     return 0
   fi
   if [[ -e "$cur" ]]; then
@@ -272,40 +274,70 @@ function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User, [strin
   Copy-Item -LiteralPath $Src -Destination $Dest -Force
   Assert-NoReparse $Dest
 }
-function Grant-VisibleUserRead([string]$DocumentsRoot, [string]$Dir, [string]$File, [string]$User) {
-  # Restore Documents to inherited ACLs so the user keeps normal write access to their folder.
-  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
+function Unlock-VisibleTree([string]$DocumentsRoot, [string]$Rel, [string]$File, [string]$User) {
+  # Restore Documents to inherited ACLs so the user keeps normal write access.
+  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot) -and (Test-Path -LiteralPath $DocumentsRoot)) {
     $null = cmd.exe /c ('icacls "{0}" /inheritance:e >nul' -f $DocumentsRoot)
     if (-not [string]::IsNullOrWhiteSpace($User)) {
       $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $DocumentsRoot, $User)
     }
   }
-  # Leaf dir: user may use the folder normally; decoy file stays read-only for the user.
-  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "{1}:(OI)(CI)M" >nul' -f $Dir, $User)
-  if (-not [string]::IsNullOrWhiteSpace($User)) {
-    $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $Dir, $User)
+  # Unlock every intermediate dir under Documents (Work, Work\Finance, ...).
+  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot) -and -not [string]::IsNullOrWhiteSpace($Rel)) {
+    $cur = $DocumentsRoot
+    foreach ($part in ($Rel -split '[\\/]+')) {
+      if ([string]::IsNullOrWhiteSpace($part)) { continue }
+      $cur = Join-Path $cur $part
+      if (-not (Test-Path -LiteralPath $cur)) { break }
+      $it = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+      if ($null -eq $it -or -not $it.PSIsContainer) { break }
+      if ($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { break }
+      $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "{1}:(OI)(CI)M" >nul' -f $cur, $User)
+      if (-not [string]::IsNullOrWhiteSpace($User)) {
+        $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $cur, $User)
+      }
+    }
   }
-  $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
-  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
-  Assert-NoReparse $File
+  # Decoy file stays read-only for the user when present.
+  if (-not [string]::IsNullOrWhiteSpace($File) -and (Test-Path -LiteralPath $File)) {
+    $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
+    $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
+    Assert-NoReparse $File
+  }
 }
-function Remove-VisibleDecoy([string]$DocumentsRoot, [string]$RelFile) {
+function Grant-VisibleUserRead([string]$DocumentsRoot, [string]$Rel, [string]$File, [string]$User) {
+  Unlock-VisibleTree $DocumentsRoot $Rel $File $User
+}
+function Remove-VisibleDecoy([string]$DocumentsRoot, [string]$RelFile, [string]$User) {
   if ([string]::IsNullOrWhiteSpace($DocumentsRoot) -or [string]::IsNullOrWhiteSpace($RelFile)) { return }
   if (-not (Test-Path -LiteralPath $DocumentsRoot)) { return }
-  Assert-NoReparse $DocumentsRoot
-  $cur = $DocumentsRoot
-  foreach ($part in ($RelFile -split '[\\/]+')) {
-    if ([string]::IsNullOrWhiteSpace($part)) { continue }
-    $cur = Join-Path $cur $part
-    if (-not (Test-Path -LiteralPath $cur)) { return }
+  $parts = @($RelFile -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($parts.Count -lt 1) { return }
+  $dirRel = if ($parts.Count -gt 1) { [string]::Join('\', $parts[0..($parts.Count-2)]) } else { '' }
+  try {
+    Assert-NoReparse $DocumentsRoot
+    Lock-VisibleDir $DocumentsRoot $User
+    $cur = $DocumentsRoot
+    foreach ($part in $parts) {
+      $cur = Join-Path $cur $part
+      if (-not (Test-Path -LiteralPath $cur)) { return }
+      Assert-NoReparse $cur
+      $it = Get-Item -LiteralPath $cur -Force
+      if ($it.PSIsContainer) {
+        Lock-VisibleDir $cur $User
+      }
+    }
+    $item = Get-Item -LiteralPath $cur -Force
+    if ($item.PSIsContainer) {
+      Write-Host ("warning: skipping directory (not removing): {0}" -f $cur)
+      return
+    }
+    $null = cmd.exe /c ('takeown /F "{0}" /A >nul' -f $cur)
     Assert-NoReparse $cur
+    Remove-Item -LiteralPath $cur -Force
+  } finally {
+    Unlock-VisibleTree $DocumentsRoot $dirRel $null $User
   }
-  $item = Get-Item -LiteralPath $cur -Force
-  if ($item.PSIsContainer) {
-    Write-Host ("warning: skipping directory (not removing): {0}" -f $cur)
-    return
-  }
-  Remove-Item -LiteralPath $cur -Force
 }
 `
 }

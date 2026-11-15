@@ -280,14 +280,19 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"Install-VisibleDecoy",
 		"Lock-VisibleDir",
 		"Grant-VisibleUserRead",
+		"Unlock-VisibleTree",
 		"Resolve-InteractiveProfile",
 		"takeown",
 		"/inheritance:e",
+		"UTF8Encoding",
 		"/remove:g",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "Set-Content -LiteralPath $cfgTmp -Encoding utf8") || strings.Contains(body, "Set-Content -LiteralPath $cfgPath -Encoding utf8") {
+		t.Fatal("windows install must write sentinel.json without a UTF-8 BOM")
 	}
 	if strings.Contains(body, `Join-Path 'C:\\Users' $userSam`) || strings.Contains(body, `Join-Path 'C:\Users' $userSam`) {
 		t.Fatal("windows install must resolve profile via SID, not C:\\Users\\<sam>")
