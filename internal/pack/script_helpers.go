@@ -1,9 +1,9 @@
 package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
-// Visible-path writes lock the leaf directory as root for the install window (no user
-// symlink plant / predictable temp / root mv into a user-writable name), then restore
-// ownership. sentinel.json is patched with jq or sed (no interpreter dependency).
+// Visible decoys are created/copied as the interactive user (no root chown/mv into a
+// user-writable tree). setfacl still runs as root with symlink + inode checks.
+// sentinel.json is patched with jq or sed (no interpreter dependency).
 func unixVisibleShellHelpers() string {
 	return `
 refuse_if_symlink() {
@@ -14,22 +14,33 @@ refuse_if_symlink() {
   fi
 }
 
-# Create Documents/<rel> component-by-component; refuse symlinks.
-# Leaf directories are left root-owned 0755 until install_visible_decoy finishes.
+run_as_user() {
+  local user="$1"
+  shift
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$user" -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$user" -- "$@"
+  else
+    echo "error: need runuser or sudo to install visible decoy as $user" >&2
+    exit 1
+  fi
+}
+
+# Create Documents/<rel> as the interactive user; refuse symlink components.
 ensure_visible_dir() {
   local docs_root="$1"
   local rel="$2"
+  local owner="$3"
   refuse_if_symlink "$docs_root"
   if [[ ! -d "$docs_root" ]]; then
-    install -d -m 0755 "$docs_root"
+    run_as_user "$owner" mkdir -p "$docs_root"
   fi
   refuse_if_symlink "$docs_root"
   if [[ ! -d "$docs_root" ]]; then
     echo "error: Documents path is not a directory: $docs_root" >&2
     exit 1
   fi
-  # Prevent rename-swap of our tree under Documents during the elevated write window.
-  chmod u-w "$docs_root" 2>/dev/null || true
   local cur="$docs_root"
   local IFS='/'
   local -a parts
@@ -45,56 +56,49 @@ ensure_visible_dir() {
         exit 1
       fi
     else
-      install -d -m 0755 -o root -g root "$cur"
+      run_as_user "$owner" mkdir -p "$cur"
       refuse_if_symlink "$cur"
     fi
-    chown root:root "$cur"
-    chmod 0755 "$cur"
   done
+  # Block rename-swap of our tree under Documents during elevated ACL work.
+  chmod u-w "$docs_root" 2>/dev/null || true
   printf '%%s' "$cur"
 }
 
-restore_visible_docs_write() {
+restore_docs_write() {
   local docs_root="$1"
-  local owner="$2"
-  local group="$3"
-  local leaf="$4"
-  if [[ -d "$leaf" && ! -L "$leaf" ]]; then
-    chown "$owner:$group" "$leaf" 2>/dev/null || true
-  fi
   if [[ -d "$docs_root" && ! -L "$docs_root" ]]; then
     chmod u+w "$docs_root" 2>/dev/null || true
-    # Do not chown Documents; only restore owner write.
   fi
 }
 
-# Install decoy with no temp name and no mv into a user-writable directory:
-# leaf dir is root-owned, so the unprivileged user cannot plant a symlink race.
+# Copy decoy as the interactive user (no root write into the user tree).
 install_visible_decoy() {
   local src="$1"
   local dest="$2"
   local owner="$3"
-  local group="$4"
   local dir
   dir="$(dirname "$dest")"
   refuse_if_symlink "$dir"
-  if [[ "$(stat -c '%%u' "$dir" 2>/dev/null || stat -f '%%u' "$dir")" != "0" ]]; then
-    chown root:root "$dir"
-    chmod 0755 "$dir"
-  fi
+  case "$dest" in
+    "$dir"/*) ;;
+    *)
+      echo "error: decoy path escapes parent dir" >&2
+      exit 1
+      ;;
+  esac
   if [[ -L "$dest" ]]; then
     echo "error: refusing symlink decoy: $dest" >&2
     exit 1
   fi
-  if [[ -e "$dest" ]]; then
-    if [[ ! -f "$dest" ]]; then
-      echo "error: visible decoy path exists and is not a regular file: $dest" >&2
-      exit 1
-    fi
-    rm -f -- "$dest"
+  if [[ -e "$dest" && ! -f "$dest" ]]; then
+    echo "error: visible decoy path exists and is not a regular file: $dest" >&2
+    exit 1
   fi
-  # Direct install into root-owned directory (no predictable .tmp, no mv).
-  install -m 0600 -o "$owner" -g "$group" "$src" "$dest"
+  # Ensure the package decoy is readable by the target user for this copy.
+  chmod a+r "$src" 2>/dev/null || true
+  run_as_user "$owner" cp -f "$src" "$dest"
+  run_as_user "$owner" chmod 600 "$dest"
   refuse_if_symlink "$dest"
   if [[ ! -f "$dest" ]]; then
     echo "error: visible decoy is not a regular file after install: $dest" >&2
@@ -102,7 +106,7 @@ install_visible_decoy() {
   fi
 }
 
-# setfacl only on verified regular non-symlink paths; inode must be stable.
+# setfacl only on verified regular/dir non-symlink paths; inode must be stable.
 safe_setfacl() {
   local path="$1"
   shift
@@ -210,16 +214,22 @@ function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel) {
   }
   return $cur
 }
-function Lock-VisibleDir([string]$Dir) {
+function Lock-VisibleDir([string]$Dir, [string]$User) {
   Assert-NoReparse $Dir
-  # Drop inherited / user write for the elevated copy window.
+  # Disable inheritance and drop explicit grants so lingering write ACEs cannot race the copy.
   $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Dir)
+  if (-not [string]::IsNullOrWhiteSpace($User)) {
+    $null = cmd.exe /c ('icacls "{0}" /remove:g "{1}" >nul' -f $Dir, $User)
+  }
+  foreach ($acct in @('Users', 'Authenticated Users', 'Everyone')) {
+    $null = cmd.exe /c ('icacls "{0}" /remove:g "{1}" >nul' -f $Dir, $acct)
+  }
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Dir)
   Assert-NoReparse $Dir
 }
-function Install-VisibleDecoy([string]$Src, [string]$Dest) {
+function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User) {
   $dir = Split-Path -Parent $Dest
-  Lock-VisibleDir $dir
+  Lock-VisibleDir $dir $User
   if (Test-Path -LiteralPath $Dest) {
     Assert-NoReparse $Dest
     $existing = Get-Item -LiteralPath $Dest -Force

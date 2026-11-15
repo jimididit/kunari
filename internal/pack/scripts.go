@@ -66,9 +66,9 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   fi
   refuse_if_symlink "$HOME_DIR"
   DOCS_ROOT="$HOME_DIR/Documents"
-  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER")"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
-  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" "$TARGET_USER"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER"
   # Grant service user read on the decoy and traverse on parents (Documents homes are often 0700).
   if command -v setfacl >/dev/null 2>&1; then
     cur="$WATCH_PATH"
@@ -87,7 +87,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     echo "error: setfacl required for --visible-under on Linux so user kunari can read $WATCH_PATH" >&2
     exit 1
   fi
-  restore_visible_docs_write "$DOCS_ROOT" "$TARGET_USER" "$TARGET_USER" "$VISIBLE_DIR"
+  restore_docs_write "$DOCS_ROOT"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
@@ -231,10 +231,10 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   fi
   refuse_if_symlink "$HOME_DIR"
   DOCS_ROOT="$HOME_DIR/Documents"
-  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER")"
+  VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
-  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER" staff
-  restore_visible_docs_write "$DOCS_ROOT" "$TARGET_USER" staff "$VISIBLE_DIR"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER"
+  restore_docs_write "$DOCS_ROOT"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chmod 0600 "$PREFIX/etc/sentinel.json"
@@ -400,7 +400,7 @@ if ($VisibleUnder -ne '') {
   $docsRoot = Join-Path $userProfile 'Documents'
   $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder
   $WatchPath = Join-Path $VisibleDir $DecoyBase
-  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath
+  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
   # Intended user may open/read the decoy; write stays with SYSTEM/Administrators.
   Grant-VisibleUserRead $VisibleDir $WatchPath $console
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'

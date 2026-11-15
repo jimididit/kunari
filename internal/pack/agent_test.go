@@ -280,6 +280,7 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"Install-VisibleDecoy",
 		"Lock-VisibleDir",
 		"Grant-VisibleUserRead",
+		"/remove:g",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
@@ -325,12 +326,16 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"patch_sentinel_watch",
 		"safe_rm_visible_file",
 		"safe_setfacl",
-		"restore_visible_docs_write",
+		"restore_docs_write",
+		"run_as_user",
 		"chmod u-w",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.sh missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "chown root:root") {
+		t.Fatal("linux visible install must not chown user tree to root")
 	}
 	if strings.Contains(body, ".kunari.tmp") {
 		t.Fatal("linux install must not use a predictable temp decoy path")
