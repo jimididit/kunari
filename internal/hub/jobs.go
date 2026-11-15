@@ -53,6 +53,11 @@ var allowedJobVerbs = map[string]struct{}{
 	VerbRotateHubURL: {},
 }
 
+// Hub-side verbs never leave the hub: EnqueueCompleted only; agents must not pull them.
+var hubSideJobVerbs = map[string]struct{}{
+	VerbAckMissing: {},
+}
+
 // Job is a bounded operator action for one agent to pull and execute.
 type Job struct {
 	ID        string          `json:"id"`
@@ -117,6 +122,11 @@ func AllowedJobVerb(verb string) bool {
 	return ok
 }
 
+func HubSideJobVerb(verb string) bool {
+	_, ok := hubSideJobVerbs[strings.TrimSpace(verb)]
+	return ok
+}
+
 func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage) (*Job, error) {
 	agentID = strings.TrimSpace(agentID)
 	verb = strings.TrimSpace(verb)
@@ -126,8 +136,8 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	if !AllowedJobVerb(verb) {
 		return nil, fmt.Errorf("verb %q not allowlisted", verb)
 	}
-	if verb == VerbAckMissing {
-		return nil, fmt.Errorf("ack_missing is hub-side; use EnqueueCompleted")
+	if HubSideJobVerb(verb) {
+		return nil, fmt.Errorf("%s is hub-side; use EnqueueCompleted", verb)
 	}
 	args, err := canonicalJSONArgs(args)
 	if err != nil {
@@ -175,6 +185,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 
 // EnqueueCompleted records a hub-side verb as already finished in one persist
 // (never queued/hub_pending, so agents cannot pull or race it).
+// Rejects agent-side verbs: those must go through Enqueue + agent Pull/Complete.
 func (s *jobStore) EnqueueCompleted(agentID, verb, createdBy string, args json.RawMessage, result, errMsg, actor string) (*Job, error) {
 	agentID = strings.TrimSpace(agentID)
 	verb = strings.TrimSpace(verb)
@@ -183,6 +194,9 @@ func (s *jobStore) EnqueueCompleted(agentID, verb, createdBy string, args json.R
 	}
 	if !AllowedJobVerb(verb) {
 		return nil, fmt.Errorf("verb %q not allowlisted", verb)
+	}
+	if !HubSideJobVerb(verb) {
+		return nil, fmt.Errorf("verb %q is agent-side; use Enqueue", verb)
 	}
 	args, err := canonicalJSONArgs(args)
 	if err != nil {

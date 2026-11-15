@@ -272,6 +272,12 @@ func TestJobStoreAckMissingEnqueueCompleted(t *testing.T) {
 	if len(s.Audit(5)) == 0 || !strings.Contains(s.Audit(5)[0].Actor, "operator") {
 		t.Fatalf("hub complete audit actor: %+v", s.Audit(5))
 	}
+	if _, err := s.EnqueueCompleted("agent-a", VerbStatusDump, "op", nil, "skip agent", "", "op"); err == nil {
+		t.Fatal("EnqueueCompleted must reject agent-side verbs")
+	}
+	if _, err := s.Enqueue("agent-a", VerbAckMissing, "op", nil); err == nil {
+		t.Fatal("Enqueue must reject hub-side verbs")
+	}
 }
 
 func TestJobSigSurvivesLineSeparatorArgs(t *testing.T) {
