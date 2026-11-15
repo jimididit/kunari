@@ -23,6 +23,7 @@ func Execute() error {
 	root.AddCommand(newPackageCmd())
 	root.AddCommand(newVerifyCmd())
 	root.AddCommand(newLintCmd())
+	root.AddCommand(newImportCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newRevokeCmd())
 	root.AddCommand(newSelfTestCmd())

@@ -31,9 +31,19 @@ type Manifest struct {
 	CreatedAt        time.Time         `json:"created_at"`
 	ExpiresAt        *time.Time        `json:"expires_at,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
+	Engagement       string            `json:"engagement,omitempty"`  // engagement id or name
+	AgentLabel       string            `json:"agent_label,omitempty"` // operator-facing host label
 	Revoked          bool              `json:"revoked"`
 	SigningPublicKey string            `json:"signing_public_key"`
 	Signature        string            `json:"signature"`
+}
+
+// Expired reports whether ExpiresAt is set and in the past.
+func (m *Manifest) Expired(now time.Time) bool {
+	if m == nil || m.ExpiresAt == nil || m.ExpiresAt.IsZero() {
+		return false
+	}
+	return !m.ExpiresAt.UTC().After(now.UTC())
 }
 
 const AuthorizedUseNotice = "Deploy only on systems you own or are authorized to monitor. Defensive use only."

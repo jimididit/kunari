@@ -2,10 +2,55 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
+	kcrypto "github.com/jimididit/kunari/internal/crypto"
 	"github.com/jimididit/kunari/internal/registry"
 	"github.com/spf13/cobra"
 )
+
+func newImportCmd() *cobra.Command {
+	var (
+		db       string
+		manifest string
+		keyPath  string
+	)
+	cmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import a signed forge manifest into a registry",
+		Long: "Verify a .manifest.json against --key and upsert it into the registry sqlite file.\n" +
+			"Point --registry at the hub data directory registry.db so beacons resolve on that collector.\n" +
+			"--key must be the same Ed25519 key used to forge (typically <hub-data>/signing.key).\n\n" +
+			authorizedUse,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			keys, err := kcrypto.Load(keyPath)
+			if err != nil {
+				return fmt.Errorf("key: %w", err)
+			}
+			st, err := registry.Open(db)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			m, err := st.ImportFile(manifest, keys.PublicHex())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("imported %s (%s)", m.TokenID, m.Name)
+			if m.Engagement != "" {
+				fmt.Printf(" engagement=%s", m.Engagement)
+			}
+			fmt.Println()
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&db, "registry", "kunari-registry.db", "registry sqlite path (use <hub-data>/registry.db for the live hub)")
+	cmd.Flags().StringVar(&manifest, "manifest", "", "path to signed *.manifest.json")
+	cmd.Flags().StringVar(&keyPath, "key", "", "trusted forge/hub signing key path")
+	_ = cmd.MarkFlagRequired("manifest")
+	_ = cmd.MarkFlagRequired("key")
+	return cmd
+}
 
 func newListCmd() *cobra.Command {
 	var db string
@@ -22,12 +67,19 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			now := time.Now().UTC()
 			for _, m := range items {
 				status := "active"
 				if m.Revoked {
 					status = "revoked"
+				} else if m.Expired(now) {
+					status = "expired"
 				}
-				fmt.Printf("%s  %-8s  %-10s  %s  %s\n", m.TokenID, status, m.Type, m.Name, m.AuthzRef)
+				eng := m.Engagement
+				if eng == "" {
+					eng = "-"
+				}
+				fmt.Printf("%s  %-8s  %-10s  %-12s  %s  %s\n", m.TokenID, status, m.Type, eng, m.Name, m.AuthzRef)
 			}
 			return nil
 		},

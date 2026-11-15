@@ -226,8 +226,17 @@ func (h *Hub) recordBeacon(tokenID, tier string, netInfo *event.Network) error {
 	memo := ""
 	if m, err := h.reg.Get(tokenID); err == nil {
 		memo = m.Memo
+		if m.Name != "" {
+			if memo != "" {
+				memo = m.Name + " | " + memo
+			} else {
+				memo = m.Name
+			}
+		}
 		if m.Revoked {
 			memo = memo + " [REVOKED]"
+		} else if m.Expired(time.Now().UTC()) {
+			memo = memo + " [EXPIRED]"
 		}
 	} else if !active {
 		memo = "unknown or unregistered token"

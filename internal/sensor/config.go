@@ -20,6 +20,8 @@ type Config struct {
 	KeyPath        string       `json:"key_path"`
 	PreferTier     []string     `json:"prefer_tiers,omitempty"`
 	AgentVersion   string       `json:"agent_version"`
+	Engagement     string       `json:"engagement,omitempty"`
+	AgentLabel     string       `json:"agent_label,omitempty"`
 	// HubURL is the hub base URL (e.g. https://beacon.example.com). When set
 	// with HubSecretFile, alerts are HMAC-POSTed to {HubURL}/api/v1/ingest.
 	HubURL        string `json:"hub_url,omitempty"`

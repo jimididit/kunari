@@ -221,6 +221,8 @@
     drawerMeta.textContent = "";
     var rows = [
       ["id", a.id || ""],
+      ["label", a.agent_label || ""],
+      ["engagement", a.engagement || ""],
       ["status", a.missing ? "missing" : "ok"],
       ["os", a.os || ""],
       ["tier", a.tier || ""],
@@ -326,7 +328,9 @@
           openAgentDrawer(a);
         });
         var cells = [
+          a.agent_label || "",
           a.hostname || "(unknown)",
+          a.engagement || "",
           a.missing ? "missing" : "ok",
           a.os || "",
           a.tier || "",
@@ -336,14 +340,14 @@
         ];
         for (var k = 0; k < cells.length; k++) {
           var td = document.createElement("td");
-          if (k === 1) {
+          if (k === 3) {
             var pill = document.createElement("span");
             pill.className = "pill " + (a.missing ? "bad" : "ok");
             pill.textContent = cells[k];
             td.appendChild(pill);
           } else {
-            if (k === 5) td.title = fmtTime(a.last_seen);
-            if (k === 6) {
+            if (k === 7) td.title = fmtTime(a.last_seen);
+            if (k === 8) {
               td.className = "mono";
               td.title = a.id || "";
             }
@@ -451,18 +455,30 @@
         var tr = document.createElement("tr");
         var name = document.createElement("td");
         name.textContent = tok.name || "";
+        if (tok.memo) name.title = tok.memo;
         tr.appendChild(name);
 
         var status = document.createElement("td");
         var pill = document.createElement("span");
-        pill.className = "pill " + (tok.revoked ? "bad" : "ok");
-        pill.textContent = tok.revoked ? "revoked" : "active";
+        var st = tok.revoked ? "revoked" : (tok.expired ? "expired" : "active");
+        pill.className = "pill " + (st === "active" ? "ok" : "bad");
+        pill.textContent = st;
         status.appendChild(pill);
         tr.appendChild(status);
+
+        var eng = document.createElement("td");
+        eng.textContent = tok.engagement || "";
+        tr.appendChild(eng);
 
         var typ = document.createElement("td");
         typ.textContent = tok.type || "";
         tr.appendChild(typ);
+
+        var path = document.createElement("td");
+        path.className = "path";
+        path.textContent = tok.intended_path || "";
+        path.title = tok.intended_path || "";
+        tr.appendChild(path);
 
         var authz = document.createElement("td");
         authz.className = "mono";

@@ -30,6 +30,8 @@ type HostInfo struct {
 	OSVersion    string `json:"os_version,omitempty"`
 	BootID       string `json:"boot_id,omitempty"`
 	AgentVersion string `json:"agent_version,omitempty"`
+	Engagement   string `json:"engagement,omitempty"`
+	AgentLabel   string `json:"agent_label,omitempty"`
 }
 
 type Actor struct {

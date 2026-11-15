@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,8 +160,17 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 		if ev.Memo == "" {
 			ev.Memo = m.Memo
 		}
+		if m.Name != "" && !strings.Contains(ev.Memo, m.Name) {
+			if ev.Memo != "" {
+				ev.Memo = m.Name + " | " + ev.Memo
+			} else {
+				ev.Memo = m.Name
+			}
+		}
 		if m.Revoked {
 			ev.Memo = ev.Memo + " [REVOKED]"
+		} else if m.Expired(time.Now().UTC()) {
+			ev.Memo = ev.Memo + " [EXPIRED]"
 		}
 	} else if !active && ev.TokenID != "unmapped" {
 		if ev.Memo != "" {

@@ -31,6 +31,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/status", h.requireAPIAuth(false, h.handleOperatorStatus))
 	mux.HandleFunc("POST /api/v1/agents/{id}/retire", h.requireAPIAuth(false, h.handleRetireAgent))
 	mux.HandleFunc("GET /api/v1/tokens", h.requireAPIAuth(false, h.handleListTokens))
+	mux.HandleFunc("POST /api/v1/tokens/import", h.requireAPIAuth(false, h.handleImportToken))
 	mux.HandleFunc("POST /api/v1/tokens/{token}/revoke", h.requireAPIAuth(false, h.handleRevokeToken))
 	return mux
 }

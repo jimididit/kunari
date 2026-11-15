@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,14 +14,21 @@ import (
 
 // tokenView is a slim registry row for the operator UI (no signatures).
 type tokenView struct {
-	TokenID   string    `json:"token_id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Detect    string    `json:"detect"`
-	AuthzRef  string    `json:"authorization_reference"`
-	Memo      string    `json:"memo,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	Revoked   bool      `json:"revoked"`
+	TokenID      string            `json:"token_id"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type"`
+	Detect       string            `json:"detect"`
+	AuthzRef     string            `json:"authorization_reference"`
+	Memo         string            `json:"memo,omitempty"`
+	Engagement   string            `json:"engagement,omitempty"`
+	AgentLabel   string            `json:"agent_label,omitempty"`
+	IntendedPath string            `json:"intended_path,omitempty"`
+	Platforms    []string          `json:"platforms,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	ExpiresAt    *time.Time        `json:"expires_at,omitempty"`
+	Expired      bool              `json:"expired,omitempty"`
+	Revoked      bool              `json:"revoked"`
 }
 
 func (h *Hub) handleOperatorStatus(w http.ResponseWriter, r *http.Request) {
@@ -118,13 +126,44 @@ func (h *Hub) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 
 func tokenViewFromManifest(m registry.Manifest) tokenView {
 	return tokenView{
-		TokenID:   m.TokenID,
-		Name:      m.Name,
-		Type:      m.Type,
-		Detect:    m.Detect,
-		AuthzRef:  m.AuthzRef,
-		Memo:      m.Memo,
-		CreatedAt: m.CreatedAt,
-		Revoked:   m.Revoked,
+		TokenID:      m.TokenID,
+		Name:         m.Name,
+		Type:         m.Type,
+		Detect:       m.Detect,
+		AuthzRef:     m.AuthzRef,
+		Memo:         m.Memo,
+		Engagement:   m.Engagement,
+		AgentLabel:   m.AgentLabel,
+		IntendedPath: m.IntendedPath,
+		Platforms:    m.Platforms,
+		Tags:         m.Tags,
+		CreatedAt:    m.CreatedAt,
+		ExpiresAt:    m.ExpiresAt,
+		Expired:      m.Expired(time.Now().UTC()),
+		Revoked:      m.Revoked,
 	}
+}
+
+func (h *Hub) handleImportToken(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var m registry.Manifest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&m); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if h.keys == nil {
+		http.Error(w, "signing key unavailable", http.StatusInternalServerError)
+		return
+	}
+	if err := h.reg.Import(&m, h.keys.PublicHex()); err != nil {
+		h.log.Error("import token", "err", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":       true,
+		"token_id": m.TokenID,
+		"token":    tokenViewFromManifest(m),
+	})
 }
