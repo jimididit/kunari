@@ -141,14 +141,6 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	detail := "queued"
-	// ack_missing is hub-side: never leave it queued for a possibly-offline agent.
-	if verb == VerbAckMissing {
-		j.Status = jobStatusDone
-		j.Result = "acked by operator"
-		j.DoneAt = &now
-		detail = jobStatusDone
-	}
 	s.jobs[j.ID] = j
 	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
@@ -157,7 +149,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		AgentID: agentID,
 		JobID:   j.ID,
 		Verb:    verb,
-		Detail:  detail,
+		Detail:  "queued",
 	})
 	if err := s.persistLocked(); err != nil {
 		delete(s.jobs, j.ID)
@@ -192,6 +184,10 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 				j.Status = jobStatusExpired
 				changed = true
 			}
+			continue
+		}
+		// Hub-side verbs are completed by the operator API, not agent pull.
+		if j.Verb == VerbAckMissing {
 			continue
 		}
 		switch j.Status {

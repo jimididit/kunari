@@ -156,17 +156,25 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// ack_missing is hub-side: clear Missing after the audit row exists. On failure,
-	// mark the job failed so it is not left as a successful ack.
+	// ack_missing is hub-side (not agent-pulled): Ack then Complete.
 	if j.Verb == VerbAckMissing {
 		h.agentMu.Lock()
 		ackErr := h.agents.AckMissing(agentID)
 		h.agentMu.Unlock()
 		if ackErr != nil {
-			_, _ = h.jobs.Complete(agentID, j.ID, "", ackErr.Error())
+			done, _ := h.jobs.Complete(agentID, j.ID, "", ackErr.Error())
+			if done != nil {
+				j = done
+			}
 			http.Error(w, ackErr.Error(), http.StatusBadRequest)
 			return
 		}
+		done, cerr := h.jobs.Complete(agentID, j.ID, "acked by operator", "")
+		if cerr != nil {
+			http.Error(w, cerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		j = done
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
