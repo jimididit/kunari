@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,13 +28,15 @@ const (
 )
 
 const (
-	jobStatusQueued = "queued"
-	jobStatusDone   = "done"
-	jobStatusFailed = "failed"
-	jobStatusExpired = "expired"
+	jobStatusQueued   = "queued"
+	jobStatusInflight = "inflight"
+	jobStatusDone     = "done"
+	jobStatusFailed   = "failed"
+	jobStatusExpired  = "expired"
 )
 
 const defaultJobTTL = 30 * time.Minute
+const jobLease = 5 * time.Minute
 const maxJobsPersisted = 500
 
 var allowedJobVerbs = map[string]struct{}{
@@ -53,11 +56,12 @@ type Job struct {
 	CreatedAt time.Time       `json:"created_at"`
 	CreatedBy string          `json:"created_by,omitempty"`
 	ExpiresAt time.Time       `json:"expires_at"`
-	Status    string          `json:"status"`
-	Result    string          `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	DoneAt    *time.Time      `json:"done_at,omitempty"`
-	Sig       string          `json:"sig"` // HMAC over canonical job fields
+	Status      string          `json:"status"`
+	Result      string          `json:"result,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	DeliveredAt *time.Time      `json:"delivered_at,omitempty"`
+	DoneAt      *time.Time      `json:"done_at,omitempty"`
+	Sig         string          `json:"sig"` // HMAC over canonical job fields
 }
 
 // AuditEntry records who queued which verb.
@@ -110,11 +114,9 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	if !AllowedJobVerb(verb) {
 		return nil, fmt.Errorf("verb %q not allowlisted", verb)
 	}
-	if len(args) == 0 {
-		args = json.RawMessage(`{}`)
-	}
-	if !json.Valid(args) {
-		return nil, fmt.Errorf("args must be json")
+	args, err := canonicalJSONArgs(args)
+	if err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	j := &Job{
@@ -177,20 +179,40 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 		if j.AgentID != agentID {
 			continue
 		}
-		if j.Status != jobStatusQueued {
-			continue
-		}
 		if !j.ExpiresAt.IsZero() && now.After(j.ExpiresAt) {
-			j.Status = jobStatusExpired
-			changed = true
+			if j.Status == jobStatusQueued || j.Status == jobStatusInflight {
+				j.Status = jobStatusExpired
+				changed = true
+			}
 			continue
 		}
+		switch j.Status {
+		case jobStatusQueued:
+			// claim with lease so re-poll does not re-deliver until lease expires
+		case jobStatusInflight:
+			if j.DeliveredAt != nil && now.Sub(*j.DeliveredAt) < jobLease {
+				continue // still leased to a prior pull
+			}
+		default:
+			continue
+		}
+		del := now
+		j.Status = jobStatusInflight
+		j.DeliveredAt = &del
+		changed = true
 		out = append(out, *j)
 	}
 	sort.Slice(out, func(i, k int) bool {
 		return out[i].CreatedAt.Before(out[k].CreatedAt)
 	})
 	if len(out) > limit {
+		// un-claim overflow so they stay queued for the next pull
+		for _, j := range out[limit:] {
+			if stored := s.jobs[j.ID]; stored != nil && stored.Status == jobStatusInflight {
+				stored.Status = jobStatusQueued
+				stored.DeliveredAt = nil
+			}
+		}
 		out = out[:limit]
 	}
 	if changed {
@@ -208,7 +230,7 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 	if j == nil || j.AgentID != agentID {
 		return nil, fmt.Errorf("not found")
 	}
-	if j.Status != jobStatusQueued {
+	if j.Status != jobStatusQueued && j.Status != jobStatusInflight {
 		cp := *j
 		return &cp, nil
 	}
@@ -288,8 +310,10 @@ func (s *jobStore) PendingCount() int {
 	n := 0
 	now := time.Now().UTC()
 	for _, j := range s.jobs {
-		if j.Status == jobStatusQueued && (j.ExpiresAt.IsZero() || now.Before(j.ExpiresAt)) {
-			n++
+		if j.ExpiresAt.IsZero() || now.Before(j.ExpiresAt) {
+			if j.Status == jobStatusQueued || j.Status == jobStatusInflight {
+				n++
+			}
 		}
 	}
 	return n
@@ -361,15 +385,29 @@ func (s *jobStore) persistLocked() error {
 	return os.WriteFile(s.auditP, ab, 0o600)
 }
 
+func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
+	if len(args) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	if !json.Valid(args) {
+		return nil, fmt.Errorf("args must be json")
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, args); err != nil {
+		return nil, fmt.Errorf("args: %w", err)
+	}
+	return json.RawMessage(buf.Bytes()), nil
+}
+
 func signJob(secret []byte, j *Job) (string, error) {
 	if len(secret) < 16 {
 		return "", fmt.Errorf("ingest secret too short for job signing")
 	}
-	args := string(j.Args)
-	if args == "" {
-		args = "{}"
+	args, err := canonicalJSONArgs(j.Args)
+	if err != nil {
+		return "", err
 	}
-	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + args + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(payload))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil)), nil

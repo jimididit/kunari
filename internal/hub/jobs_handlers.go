@@ -58,6 +58,15 @@ func (h *Hub) requireIngestHMAC(w http.ResponseWriter, r *http.Request) ([]byte,
 	return body, true
 }
 
+func (h *Hub) agentMayPullJobs(agentID string) bool {
+	// Shared ingest HMAC means any secret holder can claim any agent_id.
+	// Require a recent heartbeat for that id so idle impersonation is harder.
+	if h.agents == nil || !h.agents.enabled() {
+		return true
+	}
+	return h.agents.KnownRecently(agentID, 24*time.Hour)
+}
+
 func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
 	body, ok := h.requireIngestHMAC(w, r)
 	if !ok {
@@ -66,6 +75,10 @@ func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
 	var req jobPullRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !h.agentMayPullJobs(req.AgentID) {
+		http.Error(w, "unknown or stale agent", http.StatusForbidden)
 		return
 	}
 	jobs, err := h.jobs.Pull(req.AgentID, req.Limit)
@@ -90,6 +103,10 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	if !h.agentMayPullJobs(req.AgentID) {
+		http.Error(w, "unknown or stale agent", http.StatusForbidden)
+		return
+	}
 	j, err := h.jobs.Complete(req.AgentID, req.JobID, req.Result, req.Error)
 	if err != nil {
 		if err.Error() == "not found" {
@@ -101,7 +118,10 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 	}
 	// Hub-side side effects after successful agent completion.
 	if j.Status == jobStatusDone && j.Verb == VerbAckMissing && h.agents != nil {
-		if err := h.agents.AckMissing(j.AgentID); err != nil {
+		h.agentMu.Lock()
+		err := h.agents.AckMissing(j.AgentID)
+		h.agentMu.Unlock()
+		if err != nil {
 			h.log.Info("ack_missing after result", "agent_id", j.AgentID, "err", err)
 		}
 	}
@@ -133,7 +153,10 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 	}
 	// ack_missing is hub-side: clear Missing immediately so operators need not wait for a pull.
 	if j.Verb == VerbAckMissing && h.agents != nil {
-		if err := h.agents.AckMissing(agentID); err != nil {
+		h.agentMu.Lock()
+		err := h.agents.AckMissing(agentID)
+		h.agentMu.Unlock()
+		if err != nil {
 			h.log.Info("ack_missing enqueue", "agent_id", agentID, "err", err)
 		}
 	}

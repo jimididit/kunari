@@ -27,8 +27,12 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Pull("agent-a", 5)
-	if err != nil || len(got) != 1 || got[0].ID != j.ID {
+	if err != nil || len(got) != 1 || got[0].ID != j.ID || got[0].Status != jobStatusInflight {
 		t.Fatalf("pull: %v %+v", err, got)
+	}
+	leased, _ := s.Pull("agent-a", 5)
+	if len(leased) != 0 {
+		t.Fatalf("expected lease to suppress re-pull, got %d", len(leased))
 	}
 	done, err := s.Complete("agent-a", j.ID, `{"ok":true}`, "")
 	if err != nil || done.Status != jobStatusDone {
@@ -37,6 +41,24 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	again, _ := s.Pull("agent-a", 5)
 	if len(again) != 0 {
 		t.Fatalf("expected empty pull, got %d", len(again))
+	}
+}
+
+func TestJobStoreCanonicalArgsSig(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	s, err := newJobStore(t.TempDir(), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbSetTargets, "op", json.RawMessage("{\n  \"targets\": []\n}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(j.Args) != `{"targets":[]}` {
+		t.Fatalf("args not compacted: %s", j.Args)
+	}
+	if err := VerifyJobSig(secret, j); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -109,5 +131,12 @@ func TestAgentTrackerAckMissing(t *testing.T) {
 	snap := tr.Snapshot()
 	if len(snap) != 1 || snap[0].Missing || !snap[0].Acked {
 		t.Fatalf("snapshot after ack: %+v", snap)
+	}
+	// Healthy (fresh) agent cannot be acked.
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "healthy", Hostname: "lab", OS: "linux"}
+	tr.NoteHeartbeat(ev2)
+	if err := tr.AckMissing("healthy"); err == nil {
+		t.Fatal("expected reject ack on healthy agent")
 	}
 }

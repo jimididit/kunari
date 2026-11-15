@@ -155,11 +155,15 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	default:
 		return fmt.Errorf("verb not allowlisted")
 	}
-	args := string(j.Args)
-	if args == "" {
-		args = "{}"
+	args := j.Args
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
 	}
-	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + args + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, args); err != nil {
+		return fmt.Errorf("args: %w", err)
+	}
+	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + compact.String() + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, r.hubSecret)
 	mac.Write([]byte(payload))
 	want := mac.Sum(nil)

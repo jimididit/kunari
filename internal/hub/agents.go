@@ -124,8 +124,9 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	// Pair agent_recovered with a prior missing alert, or retry a failed recover emit.
-	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending || rec.OperatorAcked)
+	// Pair agent_recovered with a prior missing alert (or operator-acked missing), or retry a failed recover emit.
+	// OperatorAcked alone is not enough - AckMissing only sets it when the agent was actually stale/missing.
+	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending || (rec.OperatorAcked && rec.MissingAlerted))
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
@@ -284,6 +285,14 @@ func (t *agentTracker) AckMissing(id string) error {
 	if rec.Retired {
 		return fmt.Errorf("retired")
 	}
+	now := time.Now().UTC()
+	stale := rec.Missing
+	if t.staleAfter > 0 && !rec.LastSeen.IsZero() {
+		stale = stale || now.Sub(rec.LastSeen) >= t.staleAfter
+	}
+	if !stale {
+		return fmt.Errorf("agent not missing")
+	}
 	rec.Missing = false
 	rec.MissingAlerted = true
 	rec.OperatorAcked = true
@@ -294,6 +303,20 @@ func (t *agentTracker) AckMissing(id string) error {
 	}
 	t.lastErr = ""
 	return nil
+}
+
+// KnownRecently reports whether id has heartbeated within within and is not retired.
+func (t *agentTracker) KnownRecently(id string, within time.Duration) bool {
+	if t == nil || id == "" || within <= 0 {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired || rec.LastSeen.IsZero() {
+		return false
+	}
+	return time.Since(rec.LastSeen) <= within
 }
 
 // Retire removes an agent from the active roster (reimaged / decommissioned hosts).
