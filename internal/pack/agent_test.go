@@ -35,6 +35,7 @@ func TestBuildAgentLinux(t *testing.T) {
 	for _, rel := range []string{
 		"DEPLOY.md",
 		"install.sh",
+		"uninstall.sh",
 		"kunari-sentinel.service",
 		"decoys/bait.env",
 		"etc/sentinel.json",
@@ -145,7 +146,7 @@ func TestBuildAgentRejectsLinuxHomePrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), "/home") {
 		t.Fatalf("error should mention /home: %v", err)
 	}
-	sh := linuxInstall("/home/jdi/kunari-agent", "kunari", "kunari-sentinel")
+	sh := linuxInstall("/home/jdi/kunari-agent", "kunari", "kunari-sentinel", "", "")
 	if !strings.Contains(sh, "/home/*") {
 		t.Fatal("install.sh should guard against /home prefixes at runtime")
 	}
@@ -209,6 +210,9 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	if !strings.Contains(body, "icacls") {
 		t.Fatal("windows install should set ACLs")
 	}
+	if _, err := os.Stat(filepath.Join(out, "uninstall.ps1")); err != nil {
+		t.Fatal("windows package should include uninstall.ps1")
+	}
 	deploy, err := os.ReadFile(filepath.Join(out, "DEPLOY.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +222,84 @@ func TestBuildAgentWindowsPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(deploy), "Dual-layer") || !strings.Contains(string(deploy), "--detect both") {
 		t.Fatal("DEPLOY.md should recommend forge --detect both")
+	}
+}
+
+func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "payroll-2024.env")
+	sec := filepath.Join(dir, "ingest.secret")
+	_ = os.WriteFile(art, []byte("STATUS_URL=https://hub.example.com/t/x\n"), 0o600)
+	_ = os.WriteFile(sec, []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+	out := filepath.Join(dir, "winpack")
+	if err := BuildAgent(AgentOptions{
+		Target:        "windows",
+		OutDir:        out,
+		ArtifactPath:  art,
+		TokenID:       "abcdabcdabcdabcd",
+		HubURL:        "https://hub.example.com",
+		HubSecretFile: sec,
+		VisibleUnder:  "Documents/Work/Finance",
+		ClientBundle:  true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "DEPLOY.md")); err == nil {
+		t.Fatal("client bundle must omit DEPLOY.md")
+	}
+	if _, err := os.Stat(filepath.Join(out, "bin", "README.txt")); err == nil {
+		t.Fatal("client bundle must omit bin/README.txt")
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "etc", "sentinel.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg sensor.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := `__KUNARI_VISIBLE__\Work\Finance\payroll-2024.env`
+	if cfg.Targets[0].Path != want {
+		t.Fatalf("got %q want %q", cfg.Targets[0].Path, want)
+	}
+	if len(cfg.PreferTier) == 0 || cfg.PreferTier[0] != "win-sacl-4663" {
+		t.Fatalf("prefer_tiers=%v", cfg.PreferTier)
+	}
+	ps1, err := os.ReadFile(filepath.Join(out, "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(ps1)
+	for _, needle := range []string{
+		"$VisibleUnder = 'Work\\Finance'",
+		"FileSystemAuditRule",
+		"auditpol /set /subcategory:\"File System\"",
+		"ConvertFrom-Json",
+		"Documents",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("install.ps1 missing %q", needle)
+		}
+	}
+}
+
+func TestValidateVisibleUnder(t *testing.T) {
+	got, err := validateVisibleUnder("windows", `Documents\Work\Finance`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `Work\Finance` {
+		t.Fatalf("got %q", got)
+	}
+	got, err = validateVisibleUnder("linux", "Work/Finance")
+	if err != nil || got != "Work/Finance" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	if _, err := validateVisibleUnder("windows", "Documents"); err == nil {
+		t.Fatal("expected error for Documents alone")
+	}
+	if _, err := validateVisibleUnder("linux", "../etc"); err == nil {
+		t.Fatal("expected path traversal rejection")
 	}
 }
 

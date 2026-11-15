@@ -27,8 +27,13 @@ type AgentOptions struct {
 	UnitName      string // optional; systemd unit / launchd label / Windows task name
 	Engagement    string
 	AgentLabel    string
-	HubRegistry    string // optional hub registry.db; imports sibling manifest when set
-	HubSigningKey  string // trusted signing key for --hub-registry import (default: sibling signing.key)
+	HubRegistry   string // optional hub registry.db; imports sibling manifest when set
+	HubSigningKey string // trusted signing key for --hub-registry import (default: sibling signing.key)
+	// VisibleUnder is a path under the interactive user's Documents where the decoy
+	// is installed and watched (e.g. Work/Finance). Empty keeps legacy prefix/decoys watch.
+	VisibleUnder string
+	// ClientBundle omits operator-only DEPLOY.md and bin/README.txt.
+	ClientBundle bool
 }
 
 // BuildAgent writes an authorized-use agent package under OutDir.
@@ -76,6 +81,10 @@ func BuildAgent(opts AgentOptions) error {
 	if err != nil {
 		return err
 	}
+	visibleUnder, err := validateVisibleUnder(goos, opts.VisibleUnder)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return err
@@ -115,10 +124,17 @@ func BuildAgent(opts AgentOptions) error {
 		}
 	}
 
+	watchPath := targetJoin(goos, prefix, "decoys", base)
+	if visibleUnder != "" {
+		// Install rewrites this to the interactive user's Documents path.
+		// Placeholder keeps the JSON valid for packaging; install scripts replace it.
+		watchPath = visibleWatchPlaceholder(goos, visibleUnder, base)
+	}
+
 	cfgPath := filepath.Join(out, "etc", "sentinel.json")
 	cfg := sensor.Config{
 		Targets: []sensor.Target{{
-			Path:    targetJoin(goos, prefix, "decoys", base),
+			Path:    watchPath,
 			TokenID: opts.TokenID,
 			Memo:    opts.Memo,
 		}},
@@ -132,6 +148,9 @@ func BuildAgent(opts AgentOptions) error {
 		HubURL:         strings.TrimRight(opts.HubURL, "/"),
 		HubSecretFile:  targetJoin(goos, prefix, "etc", "ingest.secret"),
 	}
+	if visibleUnder != "" && goos == "windows" {
+		cfg.PreferTier = []string{"win-sacl-4663"}
+	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -140,15 +159,16 @@ func BuildAgent(opts AgentOptions) error {
 		return err
 	}
 
-	binNote := filepath.Join(out, "bin", "README.txt")
-	if err := os.WriteFile(binNote, []byte(binReadme(binName)), 0o600); err != nil {
-		return err
-	}
-
 	detect := detectFromSiblingManifest(art)
-	deploy := deployMarkdown(goos, prefix, binName, unitName, base, detect)
-	if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
-		return err
+	if !opts.ClientBundle {
+		binNote := filepath.Join(out, "bin", "README.txt")
+		if err := os.WriteFile(binNote, []byte(binReadme(binName)), 0o600); err != nil {
+			return err
+		}
+		deploy := deployMarkdown(goos, prefix, binName, unitName, base, detect)
+		if err := os.WriteFile(filepath.Join(out, "DEPLOY.md"), []byte(deploy), 0o600); err != nil {
+			return err
+		}
 	}
 	if detect != "" && detect != "both" {
 		fmt.Fprintf(os.Stderr, "warning: decoy manifest detect=%q; prefer forge --detect both for dual-layer agent deploys\n", detect)
@@ -157,7 +177,10 @@ func BuildAgent(opts AgentOptions) error {
 	switch goos {
 	case "linux":
 		unitFile := unitName + ".service"
-		if err := writeInstallScript(filepath.Join(out, "install.sh"), linuxInstall(prefix, binName, unitName)); err != nil {
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), linuxInstall(prefix, binName, unitName, visibleUnder, base)); err != nil {
+			return err
+		}
+		if err := writeInstallScript(filepath.Join(out, "uninstall.sh"), linuxUninstall(prefix, binName, unitName, visibleUnder, base)); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(out, unitFile), []byte(linuxUnit(prefix, binName)), 0o600); err != nil {
@@ -165,14 +188,20 @@ func BuildAgent(opts AgentOptions) error {
 		}
 	case "darwin":
 		plistFile := unitName + ".plist"
-		if err := writeInstallScript(filepath.Join(out, "install.sh"), darwinInstall(prefix, binName, unitName)); err != nil {
+		if err := writeInstallScript(filepath.Join(out, "install.sh"), darwinInstall(prefix, binName, unitName, visibleUnder, base)); err != nil {
+			return err
+		}
+		if err := writeInstallScript(filepath.Join(out, "uninstall.sh"), darwinUninstall(prefix, binName, unitName, visibleUnder, base)); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(out, plistFile), []byte(darwinPlist(prefix, binName, unitName)), 0o600); err != nil {
 			return err
 		}
 	case "windows":
-		if err := os.WriteFile(filepath.Join(out, "install.ps1"), []byte(windowsInstall(prefix, binName, unitName)), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, "install.ps1"), []byte(windowsInstall(prefix, binName, unitName, visibleUnder, base)), 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(out, "uninstall.ps1"), []byte(windowsUninstall(prefix, binName, unitName, visibleUnder, base)), 0o600); err != nil {
 			return err
 		}
 	}

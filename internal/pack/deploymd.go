@@ -72,6 +72,9 @@ Notes:
 - Windows: install.ps1 registers a SYSTEM scheduled task (ONSTART). The package binary is not a Windows Service binary, so sc.exe create will time out.
 - Persistence name for this package: %s.
 - Optional OPSEC knobs at package time: `+"`--binary-name`"+`, `+"`--unit-name`"+`, `+"`--prefix`"+`. Do not choose names that impersonate OS components (denied by the packager).
+- Human-visible decoy: `+"`--visible-under Work/Finance`"+` installs and watches under the interactive user's Documents; secrets stay under the private prefix. Windows also applies the File System audit SACL at install.
+- Client handoff: `+"`--client-bundle`"+` omits this DEPLOY.md and bin/README.txt.
+- Uninstall: run uninstall.sh / uninstall.ps1 from the same package (elevated).
 - Hub: with hub push configured, silence longer than `+"`--agent-stale-after`"+` emits `+"`agent_missing`"+` (time-to-notice, not stealth).
 
 This is an agent deploy (sentinel process on the endpoint). It is not beacon-only.
