@@ -59,8 +59,9 @@ func (h *Hub) requireIngestHMAC(w http.ResponseWriter, r *http.Request) ([]byte,
 }
 
 func (h *Hub) agentMayPullJobs(agentID string) bool {
-	// Shared ingest HMAC means any secret holder can claim any agent_id.
-	// Require a recent heartbeat for that id so idle impersonation is harder.
+	// Residual risk: the ingest HMAC is shared across agents on an engagement, so a
+	// compromised agent can still claim another agent_id. KnownRecently raises the bar
+	// (id must have heartbeated recently). Per-agent secrets are a later hardening.
 	if h.agents == nil || !h.agents.enabled() {
 		return true
 	}

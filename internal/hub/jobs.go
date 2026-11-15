@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jimididit/kunari/internal/safepath"
@@ -146,6 +147,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		detail = jobStatusDone
 	}
 	s.jobs[j.ID] = j
+	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
 		At:      now,
 		Actor:   createdBy,
@@ -156,6 +158,8 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 	})
 	s.trimLocked()
 	if err := s.persistLocked(); err != nil {
+		delete(s.jobs, j.ID)
+		s.audit = s.audit[:auditLen]
 		return nil, err
 	}
 	cp := *j
@@ -375,14 +379,22 @@ func (s *jobStore) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.path, b, 0o600); err != nil {
+	if err := writeFileAtomic(s.path, b); err != nil {
 		return err
 	}
 	ab, err := json.MarshalIndent(s.audit, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.auditP, ab, 0o600)
+	return writeFileAtomic(s.auditP, ab)
+}
+
+func writeFileAtomic(path string, b []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
@@ -437,6 +449,13 @@ func VerifyJobSig(secret []byte, j *Job) error {
 func truncateRunes(s string, n int) string {
 	if n <= 0 || len(s) <= n {
 		return s
+	}
+	// n is a byte budget; cut on a rune boundary so multi-byte UTF-8 is not split.
+	if n >= len(s) {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }
