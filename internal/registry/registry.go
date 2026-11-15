@@ -110,15 +110,20 @@ func (s *Store) ExistsActive(tokenID string) (bool, error) {
 	return true, nil
 }
 
-// Import verifies a signed manifest (unless already revoked) and upserts it.
+// Import verifies a signed manifest and upserts it. A token that is already
+// revoked in this store stays revoked (re-import cannot silently restore it).
 func (s *Store) Import(m *Manifest) error {
 	if m == nil || strings.TrimSpace(m.TokenID) == "" {
 		return fmt.Errorf("manifest token_id required")
 	}
-	if !m.Revoked {
-		if err := m.Verify(); err != nil {
-			return fmt.Errorf("manifest verify: %w", err)
-		}
+	if err := m.Verify(); err != nil {
+		return fmt.Errorf("manifest verify: %w", err)
+	}
+	existing, err := s.Get(m.TokenID)
+	if err == nil && existing.Revoked {
+		m.Revoked = true
+	} else if err != nil && err != sql.ErrNoRows {
+		return err
 	}
 	return s.Put(m)
 }

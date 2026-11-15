@@ -44,6 +44,70 @@ func TestExistsActiveHonorsExpiry(t *testing.T) {
 	}
 }
 
+func TestImportRequiresSignature(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "reg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	m := &Manifest{
+		TokenID:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Name:      "unsigned",
+		Type:      "env",
+		Detect:    "beacon",
+		AuthzRef:  "LAB",
+		CreatedAt: time.Now().UTC(),
+		Revoked:   true,
+	}
+	if err := st.Import(m); err == nil {
+		t.Fatal("expected verify failure for unsigned revoked manifest")
+	}
+}
+
+func TestImportPreservesRevoked(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "reg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	keys, err := kcrypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{
+		TokenID:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Name:      "lab",
+		Type:      "env",
+		Detect:    "beacon",
+		AuthzRef:  "LAB",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := m.Sign(keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Put(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Revoke(m.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	again := *m
+	again.Revoked = false
+	if err := again.Sign(keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Import(&again); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(m.TokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Revoked {
+		t.Fatal("re-import must not clear an existing revoke")
+	}
+}
+
 func TestImportVerifyAndPut(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Open(filepath.Join(dir, "reg.db"))
