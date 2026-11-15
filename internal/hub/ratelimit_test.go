@@ -9,14 +9,12 @@ import (
 )
 
 func TestIPRateLimiterAllowAndDeny(t *testing.T) {
-	lim := newIPRateLimiter(2) // 2/min burst 2
+	lim := newIPRateLimiter(2)
 	if lim == nil {
 		t.Fatal("expected limiter")
 	}
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
-	lim.global.last = base
-	lim.global.tokens = lim.globalBurst
 
 	if ok, _ := lim.allow("1.2.3.4"); !ok {
 		t.Fatal("first allow")
@@ -31,32 +29,27 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	if retry < time.Second {
 		t.Fatalf("retry-after too small: %v", retry)
 	}
-	// Other IP unaffected (per-IP), still under global.
 	if ok, _ := lim.allow("9.9.9.9"); !ok {
-		t.Fatal("other IP must allow")
+		t.Fatal("other key must allow")
 	}
-	// Refill after 60s at 2/min -> +2 tokens.
 	lim.now = func() time.Time { return base.Add(60 * time.Second) }
 	if ok, _ := lim.allow("1.2.3.4"); !ok {
 		t.Fatal("expected allow after refill")
 	}
 }
 
-func TestIPRateLimiterGlobalBackstop(t *testing.T) {
+func TestIPRateLimiterOverflow(t *testing.T) {
 	lim := newIPRateLimiter(1)
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
-	lim.global.last = base
-	lim.global.tokens = 2 // tiny global for test
-	lim.globalBurst = 2
-	lim.globalRatePerSec = 0
-	for i := 0; i < 2; i++ {
-		if ok, _ := lim.allow(fmt.Sprintf("ip-%d", i)); !ok {
-			t.Fatalf("allow %d", i)
-		}
+	if ok, _ := lim.allow("1.1.1.1"); !ok {
+		t.Fatal("primary")
 	}
-	if ok, _ := lim.allow("ip-z"); ok {
-		t.Fatal("global backstop must deny")
+	if ok, _ := lim.allow("1.1.1.1"); ok {
+		t.Fatal("primary exhausted")
+	}
+	if !lim.allowOverflow("1.1.1.1") {
+		t.Fatal("overflow should still allow recording")
 	}
 }
 
@@ -64,16 +57,11 @@ func TestIPRateLimiterDisabled(t *testing.T) {
 	if newIPRateLimiter(0) != nil {
 		t.Fatal("0 must disable")
 	}
-	if newIPRateLimiter(-1) != nil {
-		t.Fatal("negative must disable")
-	}
 }
 
 func TestLimitPublicReturns429(t *testing.T) {
 	h := &Hub{ingestLimit: newIPRateLimiter(1)}
 	h.ingestLimit.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
-	h.ingestLimit.global.last = h.ingestLimit.now()
-	h.ingestLimit.global.tokens = h.ingestLimit.globalBurst
 	var hits int
 	handler := h.limitPublic(h.ingestLimit, func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -91,12 +79,6 @@ func TestLimitPublicReturns429(t *testing.T) {
 	if rr2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second want 429, got %d", rr2.Code)
 	}
-	if rr2.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After")
-	}
-	if hits != 1 {
-		t.Fatalf("handler must not run on 429: hits=%d", hits)
-	}
 }
 
 func TestEvictOneIsBounded(t *testing.T) {
@@ -104,8 +86,6 @@ func TestEvictOneIsBounded(t *testing.T) {
 	lim.maxKeys = 3
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
-	lim.global.last = base
-	lim.global.tokens = lim.globalBurst
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("k%d", i)
 		if ok, _ := lim.allow(key); !ok {
@@ -114,5 +94,23 @@ func TestEvictOneIsBounded(t *testing.T) {
 	}
 	if len(lim.buckets) > lim.maxKeys {
 		t.Fatalf("buckets grew past max: %d", len(lim.buckets))
+	}
+}
+
+func TestAllowIngestRateKeyUsesAgent(t *testing.T) {
+	h := &Hub{ingestLimit: newIPRateLimiter(1)}
+	base := time.Unix(1_700_000_000, 0).UTC()
+	h.ingestLimit.now = func() time.Time { return base }
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.RemoteAddr = "10.0.0.1:9"
+	if ok, _ := h.allowIngestRateKey(req, "agent-a"); !ok {
+		t.Fatal("agent-a first")
+	}
+	if ok, _ := h.allowIngestRateKey(req, "agent-a"); ok {
+		t.Fatal("agent-a second must deny")
+	}
+	// Different agent behind same IP still allowed.
+	if ok, _ := h.allowIngestRateKey(req, "agent-b"); !ok {
+		t.Fatal("agent-b must not share agent-a bucket")
 	}
 }

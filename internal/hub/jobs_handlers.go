@@ -100,6 +100,10 @@ func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	if ok, retry := h.allowIngestRateKey(r, req.AgentID); !ok {
+		writeTooManyRequests(w, retry)
+		return
+	}
 	if !h.agentMayPullJobs(req.AgentID) {
 		http.Error(w, "unknown or stale agent", http.StatusForbidden)
 		return
@@ -132,6 +136,10 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 	var req jobResultRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if ok, retry := h.allowIngestRateKey(r, req.AgentID); !ok {
+		writeTooManyRequests(w, retry)
 		return
 	}
 	if !h.agentMayPullJobs(req.AgentID) {

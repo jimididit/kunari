@@ -134,7 +134,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
-Public beacon and ingest paths are rate-limited per client IP by default (`--beacon-rate-limit 60`, `--ingest-rate-limit 30`; `0` disables). Beacon hits are still recorded when over limit (429 response). Ingest/job limits apply only after HMAC so unauthenticated floods cannot burn the bucket. Operator Bearer routes are not limited here (keep them off the public vhost).
+Public paths are rate-limited by default (`--beacon-rate-limit 60` per client IP, `--ingest-rate-limit 30` per agent id after HMAC; `0` disables). Over-limit beacons still record a few overflow hits then 429; sustained floods stop writing. Operator Bearer routes are not limited here (keep them off the public vhost).
 
 Copy-paste Caddy and nginx configs: [examples/tls-hub](examples/tls-hub/README.md).
 
