@@ -252,7 +252,7 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 		prevStatus    string
 		prevDelivered *time.Time
 	}
-	claims := map[string]claim{}
+	claims := map[string]claim{} // pull claims + expiry rollbacks
 	var out []Job
 	changed := false
 	for _, j := range s.jobs {
@@ -261,6 +261,7 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 		}
 		if !j.ExpiresAt.IsZero() && now.After(j.ExpiresAt) {
 			if j.Status == jobStatusQueued || j.Status == jobStatusInflight {
+				claims[j.ID] = claim{prevStatus: j.Status, prevDelivered: j.DeliveredAt}
 				j.Status = jobStatusExpired
 				changed = true
 			}
@@ -306,8 +307,8 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 	}
 	if changed {
 		if err := s.persistLocked(); err != nil {
-			for i := range out {
-				restoreClaim(out[i].ID)
+			for id := range claims {
+				restoreClaim(id)
 			}
 			return nil, err
 		}
