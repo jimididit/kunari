@@ -122,9 +122,46 @@ func TestJobStoreCompleteRejectsQueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Complete("agent-a", queued.ID, `{"ok":true}`, "")
-	if err != nil || got.Status != jobStatusQueued {
-		t.Fatalf("complete queued must no-op: %v %+v", err, got)
+	if _, err := s.Complete("agent-a", queued.ID, `{"ok":true}`, ""); err == nil {
+		t.Fatal("complete queued must error")
+	}
+}
+
+func TestJobStoreInflightNotExpiredUnderLease(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("agent-a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Pull("agent-a", 5)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("pull: %v %+v", err, got)
+	}
+	// Force expiry in the past while lease is still live.
+	s.mu.Lock()
+	stored := s.jobs[j.ID]
+	stored.ExpiresAt = time.Now().UTC().Add(-time.Second)
+	s.mu.Unlock()
+	again, err := s.Pull("agent-a", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("leased inflight must not re-pull: %+v", again)
+	}
+	s.mu.Lock()
+	if s.jobs[j.ID].Status != jobStatusInflight {
+		s.mu.Unlock()
+		t.Fatalf("leased inflight must not expire early: %s", s.jobs[j.ID].Status)
+	}
+	s.mu.Unlock()
+	done, err := s.Complete("agent-a", j.ID, `{"ok":true}`, "")
+	if err != nil || done.Status != jobStatusDone {
+		t.Fatalf("complete under expired-but-leased job: %v %+v", err, done)
 	}
 }
 
@@ -230,7 +267,7 @@ func TestJobStoreAckMissingEnqueueCompleted(t *testing.T) {
 		t.Fatalf("completed ack_missing must not be pullable: %v %+v", err, got)
 	}
 	if got, err := s.Complete("agent-a", j.ID, "spoof", ""); err != nil || got.Status != jobStatusDone {
-		t.Fatalf("agent Complete must not change done job: %v %+v", err, got)
+		t.Fatalf("idempotent Complete on done: %v %+v", err, got)
 	}
 	if len(s.Audit(5)) == 0 || !strings.Contains(s.Audit(5)[0].Actor, "operator") {
 		t.Fatalf("hub complete audit actor: %+v", s.Audit(5))

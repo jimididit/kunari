@@ -261,7 +261,17 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 			continue
 		}
 		if !j.ExpiresAt.IsZero() && now.After(j.ExpiresAt) {
-			if j.Status == jobStatusQueued || j.Status == jobStatusInflight {
+			switch j.Status {
+			case jobStatusQueued:
+				claims[j.ID] = claim{prevStatus: j.Status, prevDelivered: j.DeliveredAt}
+				j.Status = jobStatusExpired
+				changed = true
+			case jobStatusInflight:
+				// Do not expire while the pull lease is live - the agent may still
+				// be executing and must be able to Complete.
+				if j.DeliveredAt != nil && now.Sub(*j.DeliveredAt) < jobLease {
+					continue
+				}
 				claims[j.ID] = claim{prevStatus: j.Status, prevDelivered: j.DeliveredAt}
 				j.Status = jobStatusExpired
 				changed = true
@@ -341,10 +351,17 @@ func (s *jobStore) completeJob(agentID, jobID, result, errMsg string, hubSide bo
 			cp := *j
 			return &cp, nil
 		}
-	} else if j.Status != jobStatusInflight {
-		// Agents may only complete jobs they pulled (inflight), not queued/hub_pending.
-		cp := *j
-		return &cp, nil
+	} else {
+		switch j.Status {
+		case jobStatusInflight:
+			// proceed
+		case jobStatusDone, jobStatusFailed:
+			cp := *j
+			return &cp, nil // idempotent
+		default:
+			// queued / expired / hub_pending: never silently accept
+			return nil, fmt.Errorf("job not inflight")
+		}
 	}
 	prevStatus := j.Status
 	prevResult := j.Result

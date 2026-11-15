@@ -285,9 +285,10 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
-// Caller invokes only after a successful chain append. If a heartbeat already
-// cleared Missing (and the in-flight claim), arm RecoverPending so the next
-// heartbeat still emits agent_recovered and the chained missing is not orphaned.
+// Caller invokes only after a successful chain append.
+// If Missing is still set: persist MissingAlerted.
+// If a heartbeat already cleared Missing: arm RecoverPending only - do not leave
+// a sticky MissingAlerted that would suppress the next real missing cycle.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -299,9 +300,11 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 		return
 	}
 	rec.alertClaimed = false
-	rec.MissingAlerted = true
-	if !rec.Missing {
+	if rec.Missing {
+		rec.MissingAlerted = true
+	} else {
 		rec.RecoverPending = true
+		rec.MissingAlerted = false
 	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
