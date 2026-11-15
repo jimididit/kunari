@@ -29,6 +29,9 @@ func (k *KeyPair) Sign(msg []byte) []byte {
 }
 
 func Verify(pub ed25519.PublicKey, msg, sig []byte) bool {
+	if len(pub) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize {
+		return false
+	}
 	return ed25519.Verify(pub, msg, sig)
 }
 

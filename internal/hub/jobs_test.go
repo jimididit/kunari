@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -70,6 +71,24 @@ func TestJobStoreCanonicalArgsSig(t *testing.T) {
 	}
 	if err := VerifyJobSig(keys.Public, j); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVerifyJobSigRejectsBadPubkey(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(nil, j); err == nil {
+		t.Fatal("expected reject for nil pubkey")
+	}
+	if err := VerifyJobSig(ed25519.PublicKey{1, 2, 3}, j); err == nil {
+		t.Fatal("expected reject for short pubkey")
 	}
 }
 

@@ -524,6 +524,9 @@ func signJob(keys *kcrypto.KeyPair, j *Job) (string, error) {
 
 // VerifyJobSig checks the job Ed25519 signature with the hub public key.
 func VerifyJobSig(pub ed25519.PublicKey, j *Job) error {
+	if len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid hub public key")
+	}
 	payload, err := jobSignPayload(j)
 	if err != nil {
 		return err

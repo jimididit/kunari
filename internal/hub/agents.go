@@ -332,10 +332,14 @@ func (t *agentTracker) AckMissing(id string) error {
 	}
 	// Keep MissingAlerted as-is: only emit agent_recovered later if a missing
 	// alert was actually raised. Fresh OperatorAck without a prior alert must not forge recovery.
+	prevMissing, prevAcked, prevRecover := rec.Missing, rec.OperatorAcked, rec.RecoverPending
 	rec.Missing = false
 	rec.OperatorAcked = true
 	rec.RecoverPending = false
 	if err := t.persistLocked(); err != nil {
+		rec.Missing = prevMissing
+		rec.OperatorAcked = prevAcked
+		rec.RecoverPending = prevRecover
 		t.lastErr = err.Error()
 		return err
 	}

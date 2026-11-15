@@ -156,7 +156,7 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	default:
 		return fmt.Errorf("verb not allowlisted")
 	}
-	if len(r.hubPubKey) == 0 {
+	if len(r.hubPubKey) != ed25519.PublicKeySize {
 		return fmt.Errorf("hub pubkey not configured")
 	}
 	args := j.Args
