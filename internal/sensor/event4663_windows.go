@@ -28,6 +28,7 @@ type event4663Watcher struct {
 	statePath string
 	maxID     uint64
 	haveMax   bool // true after restore or cold-start seed
+	started   time.Time
 }
 
 func newEvent4663(targets []Target) (*event4663Watcher, error) {
@@ -46,17 +47,23 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 		targets: targets,
 		hash:    hex.EncodeToString(sum[:]),
 		seen:    map[string]struct{}{},
+		started: time.Now().UTC(),
 	}, nil
 }
 
 // RestoreSeen loads the last emitted EventRecordID from dataDir so restarts
 // re-emit touches that happened while the sensor was down, without replaying
-// the entire Security log window.
+// the entire Security log window. The file is keyed by watcher config hash so
+// adding/removing targets does not look like a Security log clear.
 func (w *event4663Watcher) RestoreSeen(dir string) error {
 	if w == nil || strings.TrimSpace(dir) == "" {
 		return nil
 	}
-	w.statePath = filepath.Join(dir, event4663MaxIDFile)
+	suffix := w.hash
+	if len(suffix) > 16 {
+		suffix = suffix[:16]
+	}
+	w.statePath = filepath.Join(dir, event4663MaxIDFile+"."+suffix)
 	b, err := os.ReadFile(w.statePath) // #nosec G304 -- path under sentinel data_dir
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -138,13 +145,36 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 			}
 			touches := parse4663(raw, w.targets)
 			if !w.haveMax {
-				// Cold start: advance watermark to the current window without emitting.
+				// Cold start: raise watermark for historical rows, but still emit
+				// touches at/after watcher start so the first poll is not blind.
+				floor := w.started.Add(-2 * time.Second)
+				type pendingTouch struct {
+					id    uint64
+					touch Touch
+				}
+				var pending []pendingTouch
 				for _, touch := range touches {
-					if id, ok := parseRecordID(touch); ok && id > w.maxID {
+					id, okID := parseRecordID(touch)
+					if okID && id > w.maxID {
 						w.maxID = id
 					}
+					key := ""
 					if touch.Extra != nil {
-						_ = w.rememberRecord(touch.Extra["event_record_id"])
+						key = touch.Extra["event_record_id"]
+					}
+					if key == "" || w.rememberRecord(key) || !okID {
+						continue
+					}
+					if created, ok := touchEventTime(touch); ok && !created.Before(floor) {
+						pending = append(pending, pendingTouch{id: id, touch: touch})
+					}
+				}
+				sort.Slice(pending, func(i, j int) bool { return pending[i].id < pending[j].id })
+				for _, p := range pending {
+					select {
+					case out <- p.touch:
+					case <-ctx.Done():
+						return nil
 					}
 				}
 				w.haveMax = true

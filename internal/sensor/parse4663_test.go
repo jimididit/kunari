@@ -170,11 +170,11 @@ func TestRememberRecordAllowsRepeatReads(t *testing.T) {
 
 func TestRestoreSeenLoadsMaxRecordID(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, event4663MaxIDFile)
+	w := &event4663Watcher{seen: map[string]struct{}{}, hash: "abcdabcdabcdabcdffff"}
+	path := filepath.Join(dir, event4663MaxIDFile+".abcdabcdabcdabcd")
 	if err := os.WriteFile(path, []byte("42\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := &event4663Watcher{seen: map[string]struct{}{}}
 	if err := w.RestoreSeen(dir); err != nil {
 		t.Fatal(err)
 	}
