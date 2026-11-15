@@ -108,6 +108,47 @@ func TestAgentTrackerRecoverPendingAfterClaimHeartbeatRace(t *testing.T) {
 	}
 }
 
+func TestAgentTrackerMarkAfterAckRaceNoRecoverPending(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-ack-race", Hostname: "a", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	_ = tr.CheckMissing(time.Now().UTC().Add(100 * time.Millisecond))
+	if !tr.ClaimMissingAlert("agent-ack-race") {
+		t.Fatal("expected claim")
+	}
+	if err := tr.AckMissing("agent-ack-race"); err != nil {
+		t.Fatal(err)
+	}
+	tr.MarkMissingAlerted("agent-ack-race")
+	snap := tr.Snapshot()
+	if len(snap) != 1 || !snap[0].Acked || snap[0].Missing {
+		t.Fatalf("after ack+mark want acked silent agent: %+v", snap)
+	}
+	// Still silent: CheckMissing must not re-alert; RecoverPending must not be armed.
+	if got := tr.CheckMissing(time.Now().UTC().Add(200 * time.Millisecond)); len(got) != 0 {
+		t.Fatalf("acked still-silent agent must not re-alert: %+v", got)
+	}
+	tr.mu.Lock()
+	pending := tr.byID["agent-ack-race"].RecoverPending
+	alerted := tr.byID["agent-ack-race"].MissingAlerted
+	tr.mu.Unlock()
+	if pending {
+		t.Fatal("Ack race must not arm RecoverPending on a still-silent agent")
+	}
+	if !alerted {
+		t.Fatal("durable missing after Ack must set MissingAlerted for HB pairing")
+	}
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-ack-race", Hostname: "a", OS: "linux"}
+	if !tr.NoteHeartbeat(ev2) {
+		t.Fatal("expected recovered=true via OperatorAcked && MissingAlerted")
+	}
+}
+
 func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
 	tr, err := newAgentTracker(t.TempDir(), time.Minute)
 	if err != nil {
