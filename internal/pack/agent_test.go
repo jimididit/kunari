@@ -280,11 +280,17 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"Install-VisibleDecoy",
 		"Lock-VisibleDir",
 		"Grant-VisibleUserRead",
+		"Resolve-InteractiveProfile",
+		"takeown",
+		"/inheritance:e",
 		"/remove:g",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
 		}
+	}
+	if strings.Contains(body, `Join-Path 'C:\\Users' $userSam`) || strings.Contains(body, `Join-Path 'C:\Users' $userSam`) {
+		t.Fatal("windows install must resolve profile via SID, not C:\\Users\\<sam>")
 	}
 	if strings.Contains(body, ".kunari.tmp") {
 		t.Fatal("windows install must not use a predictable temp decoy path")

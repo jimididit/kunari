@@ -118,19 +118,36 @@ grant_group_read_path() {
   fi
 }
 
-# Elevated uninstall: only remove a regular non-symlink file.
+# Elevated uninstall: walk docs_root/rel and refuse any symlink component before rm.
 safe_rm_visible_file() {
-  local target="$1"
-  if [[ -L "$target" ]]; then
-    echo "warning: skipping symlink (not removing): $target" >&2
+  local docs_root="$1"
+  local rel="$2"
+  if [[ -z "$docs_root" || -z "$rel" ]]; then
     return 0
   fi
-  if [[ -f "$target" ]]; then
-    rm -f -- "$target"
+  if [[ -L "$docs_root" || ! -d "$docs_root" ]]; then
+    echo "warning: skipping visible uninstall; Documents path unsafe: $docs_root" >&2
     return 0
   fi
-  if [[ -e "$target" ]]; then
-    echo "warning: skipping non-regular visible path: $target" >&2
+  local cur="$docs_root"
+  local IFS='/'
+  local -a parts
+  read -r -a parts <<< "$rel"
+  local p
+  for p in "${parts[@]}"; do
+    [[ -n "$p" ]] || continue
+    cur="$cur/$p"
+    if [[ -L "$cur" ]]; then
+      echo "warning: skipping symlink in visible path (not removing): $cur" >&2
+      return 0
+    fi
+  done
+  if [[ -f "$cur" ]]; then
+    rm -f -- "$cur"
+    return 0
+  fi
+  if [[ -e "$cur" ]]; then
+    echo "warning: skipping non-regular visible path: $cur" >&2
   fi
 }
 
@@ -184,29 +201,27 @@ function Assert-NoReparse([string]$Path) {
     throw ("refusing reparse point (symlink/junction): {0}" -f $Path)
   }
 }
-function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel) {
-  if (-not (Test-Path -LiteralPath $DocumentsRoot)) {
-    New-Item -ItemType Directory -Force -Path $DocumentsRoot | Out-Null
+function Resolve-InteractiveProfile([string]$ConsoleUser) {
+  if ([string]::IsNullOrWhiteSpace($ConsoleUser) -or $ConsoleUser -notmatch '\\') {
+    throw 'could not resolve interactive user for --visible-under'
   }
-  Assert-NoReparse $DocumentsRoot
-  $cur = $DocumentsRoot
-  foreach ($part in ($Rel -split '[\\/]+')) {
-    if ([string]::IsNullOrWhiteSpace($part)) { continue }
-    $cur = Join-Path $cur $part
-    if (Test-Path -LiteralPath $cur) {
-      Assert-NoReparse $cur
-      $it = Get-Item -LiteralPath $cur -Force
-      if (-not $it.PSIsContainer) { throw ("not a directory: {0}" -f $cur) }
-    } else {
-      New-Item -ItemType Directory -Force -Path $cur | Out-Null
-      Assert-NoReparse $cur
-    }
+  $account = New-Object System.Security.Principal.NTAccount($ConsoleUser)
+  $sid = $account.Translate([System.Security.Principal.SecurityIdentifier]).Value
+  $profileKey = Join-Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' $sid
+  if (-not (Test-Path -LiteralPath $profileKey)) {
+    throw ("profile list entry missing for {0} ({1})" -f $ConsoleUser, $sid)
   }
-  return $cur
+  $userProfile = (Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath
+  if ([string]::IsNullOrWhiteSpace($userProfile) -or -not (Test-Path -LiteralPath $userProfile)) {
+    throw ("interactive user profile not found for {0}: {1}" -f $ConsoleUser, $userProfile)
+  }
+  Assert-NoReparse $userProfile
+  return $userProfile
 }
 function Lock-VisibleDir([string]$Dir, [string]$User) {
   Assert-NoReparse $Dir
-  # Disable inheritance and drop explicit grants so lingering write ACEs cannot race the copy.
+  # Take ownership so an unprivileged folder owner cannot re-grant themselves write mid-copy.
+  $null = cmd.exe /c ('takeown /F "{0}" /A >nul' -f $Dir)
   $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $Dir)
   if (-not [string]::IsNullOrWhiteSpace($User)) {
     $null = cmd.exe /c ('icacls "{0}" /remove:g "{1}" >nul' -f $Dir, $User)
@@ -217,9 +232,32 @@ function Lock-VisibleDir([string]$Dir, [string]$User) {
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Dir)
   Assert-NoReparse $Dir
 }
+function Ensure-VisibleDir([string]$DocumentsRoot, [string]$Rel, [string]$User) {
+  if (-not (Test-Path -LiteralPath $DocumentsRoot)) {
+    New-Item -ItemType Directory -Force -Path $DocumentsRoot | Out-Null
+  }
+  # Lock Documents before creating children so the tree cannot be junction-swapped mid-create.
+  Lock-VisibleDir $DocumentsRoot $User
+  Assert-NoReparse $DocumentsRoot
+  $cur = $DocumentsRoot
+  foreach ($part in ($Rel -split '[\\/]+')) {
+    if ([string]::IsNullOrWhiteSpace($part)) { continue }
+    $cur = Join-Path $cur $part
+    if (Test-Path -LiteralPath $cur) {
+      Assert-NoReparse $cur
+      $it = Get-Item -LiteralPath $cur -Force
+      if (-not $it.PSIsContainer) { throw ("not a directory: {0}" -f $cur) }
+      Lock-VisibleDir $cur $User
+    } else {
+      New-Item -ItemType Directory -Force -Path $cur | Out-Null
+      Assert-NoReparse $cur
+      Lock-VisibleDir $cur $User
+    }
+  }
+  return $cur
+}
 function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User, [string]$DocumentsRoot) {
   $dir = Split-Path -Parent $Dest
-  # Lock Documents as well so the leaf cannot be rename-swapped for a junction mid-copy.
   if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
     Lock-VisibleDir $DocumentsRoot $User
   }
@@ -231,31 +269,43 @@ function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User, [strin
     Remove-Item -LiteralPath $Dest -Force
   }
   Assert-NoReparse $dir
-  # Direct copy into the locked directory (no predictable temp name in the user tree).
   Copy-Item -LiteralPath $Src -Destination $Dest -Force
   Assert-NoReparse $Dest
 }
 function Grant-VisibleUserRead([string]$DocumentsRoot, [string]$Dir, [string]$File, [string]$User) {
+  # Restore Documents to inherited ACLs so the user keeps normal write access to their folder.
   if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
-    $null = cmd.exe /c ('icacls "{0}" /grant:r "{1}:(RX)" >nul' -f $DocumentsRoot, $User)
+    $null = cmd.exe /c ('icacls "{0}" /inheritance:e >nul' -f $DocumentsRoot)
+    if (-not [string]::IsNullOrWhiteSpace($User)) {
+      $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $DocumentsRoot, $User)
+    }
   }
-  $null = cmd.exe /c ('icacls "{0}" /grant:r "{1}:(RX)" >nul' -f $Dir, $User)
+  # Leaf dir: user may use the folder normally; decoy file stays read-only for the user.
+  $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "{1}:(OI)(CI)M" >nul' -f $Dir, $User)
+  if (-not [string]::IsNullOrWhiteSpace($User)) {
+    $null = cmd.exe /c ('icacls "{0}" /setowner "{1}" >nul' -f $Dir, $User)
+  }
   $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
   Assert-NoReparse $File
 }
-function Remove-VisibleDecoy([string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path)) { return }
-  $item = Get-Item -LiteralPath $Path -Force
-  if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-    Write-Host ("warning: skipping reparse point (not removing): {0}" -f $Path)
-    return
+function Remove-VisibleDecoy([string]$DocumentsRoot, [string]$RelFile) {
+  if ([string]::IsNullOrWhiteSpace($DocumentsRoot) -or [string]::IsNullOrWhiteSpace($RelFile)) { return }
+  if (-not (Test-Path -LiteralPath $DocumentsRoot)) { return }
+  Assert-NoReparse $DocumentsRoot
+  $cur = $DocumentsRoot
+  foreach ($part in ($RelFile -split '[\\/]+')) {
+    if ([string]::IsNullOrWhiteSpace($part)) { continue }
+    $cur = Join-Path $cur $part
+    if (-not (Test-Path -LiteralPath $cur)) { return }
+    Assert-NoReparse $cur
   }
+  $item = Get-Item -LiteralPath $cur -Force
   if ($item.PSIsContainer) {
-    Write-Host ("warning: skipping directory (not removing): {0}" -f $Path)
+    Write-Host ("warning: skipping directory (not removing): {0}" -f $cur)
     return
   }
-  Remove-Item -LiteralPath $Path -Force
+  Remove-Item -LiteralPath $cur -Force
 }
 `
 }

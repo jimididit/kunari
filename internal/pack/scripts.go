@@ -129,7 +129,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   if [[ -n "$TARGET_USER" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
     if [[ -n "$HOME_DIR" ]]; then
-      safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+      safe_rm_visible_file "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
     fi
   fi
 fi
@@ -278,7 +278,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
     if [[ -z "$HOME_DIR" ]]; then
       HOME_DIR="/Users/$TARGET_USER"
     fi
-    safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
+    safe_rm_visible_file "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
   fi
 fi
 rm -rf "$PREFIX"
@@ -375,20 +375,12 @@ $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" >nul' -
 $WatchPath = Join-Path $Prefix ('decoys\' + $DecoyBase)
 if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
-  if ([string]::IsNullOrWhiteSpace($console) -or $console -notmatch '\\') {
-    throw 'could not resolve interactive user for --visible-under'
-  }
-  $userSam = $console.Split('\')[-1]
-  $userProfile = Join-Path 'C:\Users' $userSam
-  if (-not (Test-Path -LiteralPath $userProfile)) {
-    throw ("interactive user profile not found: {0}" -f $userProfile)
-  }
-  Assert-NoReparse $userProfile
+  $userProfile = Resolve-InteractiveProfile $console
   $docsRoot = Join-Path $userProfile 'Documents'
-  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder
+  $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
   $WatchPath = Join-Path $VisibleDir $DecoyBase
   Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console $docsRoot
-  # Intended user may open/read the decoy; write stays with SYSTEM/Administrators.
+  # Restore Documents write for the user; decoy file stays user-readable only.
   Grant-VisibleUserRead $docsRoot $VisibleDir $WatchPath $console
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
   $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
@@ -463,9 +455,9 @@ if ($svc) {
 if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
   if (-not [string]::IsNullOrWhiteSpace($console) -and $console -match '\\') {
-    $userSam = $console.Split('\')[-1]
-    $watch = Join-Path (Join-Path (Join-Path 'C:\Users' $userSam) ('Documents\' + $VisibleUnder)) $DecoyBase
-    Remove-VisibleDecoy $watch
+    $userProfile = Resolve-InteractiveProfile $console
+    $docsRoot = Join-Path $userProfile 'Documents'
+    Remove-VisibleDecoy $docsRoot ($VisibleUnder + '\' + $DecoyBase)
   }
 }
 if (Test-Path -LiteralPath $Prefix) {
