@@ -325,14 +325,16 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"install_visible_decoy",
 		"patch_sentinel_watch",
 		"safe_rm_visible_file",
-		"safe_setfacl",
-		"restore_docs_write",
+		"grant_group_read_path",
+		"SupplementaryGroups=",
 		"run_as_user",
-		"chmod u-w",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.sh missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "setfacl -") || strings.Contains(body, "command -v setfacl") {
+		t.Fatal("linux visible install must not invoke setfacl on user paths")
 	}
 	if strings.Contains(body, "chown root:root") {
 		t.Fatal("linux visible install must not chown user tree to root")

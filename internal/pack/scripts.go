@@ -69,25 +69,9 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
   WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
   install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER"
-  # Grant service user read on the decoy and traverse on parents (Documents homes are often 0700).
-  if command -v setfacl >/dev/null 2>&1; then
-    cur="$WATCH_PATH"
-    while [[ "$cur" != "/" && "$cur" != "$HOME_DIR" ]]; do
-      if [[ -e "$cur" ]]; then
-        safe_setfacl "$cur" -m "u:kunari:x" || true
-      fi
-      cur="$(dirname "$cur")"
-    done
-    safe_setfacl "$HOME_DIR" -m "u:kunari:x" || true
-    safe_setfacl "$WATCH_PATH" -m "u:kunari:r" || {
-      echo "error: setfacl failed granting kunari read on $WATCH_PATH" >&2
-      exit 1
-    }
-  else
-    echo "error: setfacl required for --visible-under on Linux so user kunari can read $WATCH_PATH" >&2
-    exit 1
-  fi
-  restore_docs_write "$DOCS_ROOT"
+  # Service user joins the owner's group (SupplementaryGroups below); no POSIX ACL changes.
+  grant_group_read_path "$TARGET_USER" "$HOME_DIR" "$WATCH_PATH"
+  VISIBLE_OWNER_GID="$(id -g "$TARGET_USER")"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
@@ -99,7 +83,15 @@ if [[ "$UNIT_NAME" != "kunari-sentinel" ]] && [[ -f /etc/systemd/system/kunari-s
   systemctl disable --now kunari-sentinel.service 2>/dev/null || true
   rm -f /etc/systemd/system/kunari-sentinel.service
 fi
-install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
+if [[ -n "${VISIBLE_OWNER_GID:-}" ]]; then
+  awk -v gid="$VISIBLE_OWNER_GID" '
+    /^\[Service\]$/ { print; print "SupplementaryGroups=" gid; next }
+    { print }
+  ' "$ROOT/$UNIT_FILE" > "/etc/systemd/system/$UNIT_FILE"
+  chmod 0644 "/etc/systemd/system/$UNIT_FILE"
+else
+  install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
+fi
 systemctl daemon-reload
 systemctl enable --now "$UNIT_FILE"
 echo "installed under $PREFIX; service $UNIT_NAME started"
@@ -137,12 +129,7 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   if [[ -n "$TARGET_USER" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
     if [[ -n "$HOME_DIR" ]]; then
-      VIS="$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
-      clear_visible_acls "$VIS"
-      clear_visible_acls "$HOME_DIR/Documents/$VISIBLE_UNDER"
-      clear_visible_acls "$HOME_DIR/Documents"
-      clear_visible_acls "$HOME_DIR"
-      safe_rm_visible_file "$VIS"
+      safe_rm_visible_file "$HOME_DIR/Documents/$VISIBLE_UNDER/$DECOY_BASE"
     fi
   fi
 fi
@@ -400,13 +387,16 @@ if ($VisibleUnder -ne '') {
   $docsRoot = Join-Path $userProfile 'Documents'
   $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder
   $WatchPath = Join-Path $VisibleDir $DecoyBase
-  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
+  Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console $docsRoot
   # Intended user may open/read the decoy; write stays with SYSTEM/Administrators.
-  Grant-VisibleUserRead $VisibleDir $WatchPath $console
+  Grant-VisibleUserRead $docsRoot $VisibleDir $WatchPath $console
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
   $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
   $cfg.targets[0].path = $WatchPath
-  ($cfg | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $cfgPath -Encoding utf8
+  $cfgTmp = Join-Path $env:TEMP ('kunari-sentinel-' + [guid]::NewGuid().ToString() + '.json')
+  ($cfg | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $cfgTmp -Encoding utf8
+  Copy-Item -LiteralPath $cfgTmp -Destination $cfgPath -Force
+  Remove-Item -LiteralPath $cfgTmp -Force -ErrorAction SilentlyContinue
   # Enable object-access auditing and attach SACL so win-sacl-4663 sees open/read.
   $null = cmd.exe /c 'auditpol /set /subcategory:"File System" /success:enable >nul'
   $acl = Get-Acl -Path $WatchPath -Audit

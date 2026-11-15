@@ -1,9 +1,9 @@
 package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
-// Visible decoys are created/copied as the interactive user (no root chown/mv into a
-// user-writable tree). setfacl still runs as root with symlink + inode checks.
-// sentinel.json is patched with jq or sed (no interpreter dependency).
+// Visible decoys are created/copied as the interactive user (no root chown/mv/setfacl
+// into a user-writable tree). Linux grants the service access via the owner's group +
+// systemd SupplementaryGroups. sentinel.json is patched with jq or sed.
 func unixVisibleShellHelpers() string {
 	return `
 refuse_if_symlink() {
@@ -60,16 +60,7 @@ ensure_visible_dir() {
       refuse_if_symlink "$cur"
     fi
   done
-  # Block rename-swap of our tree under Documents during elevated ACL work.
-  chmod u-w "$docs_root" 2>/dev/null || true
   printf '%%s' "$cur"
-}
-
-restore_docs_write() {
-  local docs_root="$1"
-  if [[ -d "$docs_root" && ! -L "$docs_root" ]]; then
-    chmod u+w "$docs_root" 2>/dev/null || true
-  fi
 }
 
 # Copy decoy as the interactive user (no root write into the user tree).
@@ -95,7 +86,6 @@ install_visible_decoy() {
     echo "error: visible decoy path exists and is not a regular file: $dest" >&2
     exit 1
   fi
-  # Ensure the package decoy is readable by the target user for this copy.
   chmod a+r "$src" 2>/dev/null || true
   run_as_user "$owner" cp -f "$src" "$dest"
   run_as_user "$owner" chmod 600 "$dest"
@@ -106,31 +96,25 @@ install_visible_decoy() {
   fi
 }
 
-# setfacl only on verified regular/dir non-symlink paths; inode must be stable.
-safe_setfacl() {
-  local path="$1"
-  shift
-  refuse_if_symlink "$path"
-  if [[ ! -e "$path" ]]; then
-    echo "error: setfacl target missing: $path" >&2
-    exit 1
-  fi
-  local before after
-  if before="$(stat -c '%%d:%%i' "$path" 2>/dev/null)"; then
-    :
-  else
-    before="$(stat -f '%%d:%%i' "$path")"
-  fi
-  setfacl "$@" "$path"
-  refuse_if_symlink "$path"
-  if after="$(stat -c '%%d:%%i' "$path" 2>/dev/null)"; then
-    :
-  else
-    after="$(stat -f '%%d:%%i' "$path")"
-  fi
-  if [[ "$before" != "$after" ]]; then
-    echo "error: setfacl target changed during update: $path" >&2
-    exit 1
+# Allow service user (via owner's group) to traverse parents and read the decoy.
+grant_group_read_path() {
+  local owner="$1"
+  local home_dir="$2"
+  local watch_path="$3"
+  refuse_if_symlink "$watch_path"
+  run_as_user "$owner" chmod g+r "$watch_path"
+  local cur
+  cur="$(dirname "$watch_path")"
+  while [[ "$cur" != "/" && "$cur" != "$home_dir" ]]; do
+    refuse_if_symlink "$cur"
+    run_as_user "$owner" chmod g+x "$cur" || true
+    cur="$(dirname "$cur")"
+  done
+  refuse_if_symlink "$home_dir"
+  run_as_user "$owner" chmod g+x "$home_dir" || true
+  if [[ -d "$home_dir/Documents" ]]; then
+    refuse_if_symlink "$home_dir/Documents"
+    run_as_user "$owner" chmod g+x "$home_dir/Documents" || true
   fi
 }
 
@@ -150,14 +134,8 @@ safe_rm_visible_file() {
   fi
 }
 
-clear_visible_acls() {
-  local path="$1"
-  if [[ -e "$path" && ! -L "$path" ]] && command -v setfacl >/dev/null 2>&1; then
-    setfacl -x "u:kunari" "$path" 2>/dev/null || true
-  fi
-}
-
 # Replace packaged __KUNARI_VISIBLE__ placeholder with the real watch path.
+# Writes through the existing inode when possible so ownership/mode stay intact.
 patch_sentinel_watch() {
   local cfg="$1"
   local watch="$2"
@@ -165,21 +143,33 @@ patch_sentinel_watch() {
   local tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/kunari-sentinel.XXXXXX")"
   if command -v jq >/dev/null 2>&1; then
-    jq --arg p "$watch" '.targets[0].path = $p' "$cfg" >"$tmp"
-    mv "$tmp" "$cfg"
-    return 0
+    if ! jq --arg p "$watch" '.targets[0].path = $p' "$cfg" >"$tmp"; then
+      rm -f "$tmp"
+      echo "error: jq failed patching sentinel.json" >&2
+      exit 1
+    fi
+  else
+    local esc="$watch"
+    esc="${esc//\\/\\\\}"
+    esc="${esc//\"/\\\"}"
+    # shellcheck disable=SC2001
+    if ! sed "s|${placeholder}|${esc}|g" "$cfg" >"$tmp"; then
+      rm -f "$tmp"
+      echo "error: sed failed patching sentinel.json" >&2
+      exit 1
+    fi
   fi
-  local esc="$watch"
-  esc="${esc//\\/\\\\}"
-  esc="${esc//\"/\\\"}"
-  # shellcheck disable=SC2001
-  sed "s|${placeholder}|${esc}|g" "$cfg" >"$tmp"
-  if ! grep -Fq "$watch" "$tmp"; then
+  if [[ ! -s "$tmp" ]] || ! grep -Fq "$watch" "$tmp"; then
     rm -f "$tmp"
     echo "error: failed to patch sentinel.json watch path (install jq for reliable JSON edits)" >&2
     exit 1
   fi
-  mv "$tmp" "$cfg"
+  if [[ -f "$cfg" ]]; then
+    cat "$tmp" >"$cfg"
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$cfg"
+  fi
 }
 `
 }
@@ -227,8 +217,12 @@ function Lock-VisibleDir([string]$Dir, [string]$User) {
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" >nul' -f $Dir)
   Assert-NoReparse $Dir
 }
-function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User) {
+function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User, [string]$DocumentsRoot) {
   $dir = Split-Path -Parent $Dest
+  # Lock Documents as well so the leaf cannot be rename-swapped for a junction mid-copy.
+  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
+    Lock-VisibleDir $DocumentsRoot $User
+  }
   Lock-VisibleDir $dir $User
   if (Test-Path -LiteralPath $Dest) {
     Assert-NoReparse $Dest
@@ -236,11 +230,15 @@ function Install-VisibleDecoy([string]$Src, [string]$Dest, [string]$User) {
     if ($existing.PSIsContainer) { throw ("visible decoy path is a directory: {0}" -f $Dest) }
     Remove-Item -LiteralPath $Dest -Force
   }
+  Assert-NoReparse $dir
   # Direct copy into the locked directory (no predictable temp name in the user tree).
   Copy-Item -LiteralPath $Src -Destination $Dest -Force
   Assert-NoReparse $Dest
 }
-function Grant-VisibleUserRead([string]$Dir, [string]$File, [string]$User) {
+function Grant-VisibleUserRead([string]$DocumentsRoot, [string]$Dir, [string]$File, [string]$User) {
+  if (-not [string]::IsNullOrWhiteSpace($DocumentsRoot)) {
+    $null = cmd.exe /c ('icacls "{0}" /grant:r "{1}:(RX)" >nul' -f $DocumentsRoot, $User)
+  }
   $null = cmd.exe /c ('icacls "{0}" /grant:r "{1}:(RX)" >nul' -f $Dir, $User)
   $null = cmd.exe /c ('icacls "{0}" /inheritance:r >nul' -f $File)
   $null = cmd.exe /c ('icacls "{0}" /grant:r "SYSTEM:F" "Administrators:F" "{1}:(R)" >nul' -f $File, $User)
