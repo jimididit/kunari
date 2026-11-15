@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,57 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	again, _ := s.Pull("agent-a", 5)
 	if len(again) != 0 {
 		t.Fatalf("expected empty pull, got %d", len(again))
+	}
+}
+
+func TestJobStoreTrimNeverEvictsActive(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	now := time.Now().UTC()
+	for i := 0; i < maxJobsPersisted+5; i++ {
+		id := "done-" + strconv.Itoa(i)
+		s.jobs[id] = &Job{
+			ID: id, AgentID: "a", Verb: VerbStatusDump, Status: jobStatusDone,
+			CreatedAt: now.Add(-time.Duration(i) * time.Second), Args: json.RawMessage(`{}`),
+		}
+	}
+	activeIDs := []string{"active-0", "active-1", "active-2"}
+	for _, id := range activeIDs {
+		s.jobs[id] = &Job{
+			ID: id, AgentID: "b", Verb: VerbStatusDump, Status: jobStatusQueued,
+			CreatedAt: now, Args: json.RawMessage(`{}`),
+		}
+	}
+	s.trimLocked()
+	for _, id := range activeIDs {
+		if stored := s.jobs[id]; stored == nil || stored.Status != jobStatusQueued {
+			s.mu.Unlock()
+			t.Fatalf("active job evicted: %s", id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+func TestVerifyJobSigDoesNotMutateArgs(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Enqueue("a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Args = nil
+	if err := VerifyJobSig(keys.Public, j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Args != nil {
+		t.Fatalf("VerifyJobSig mutated Args: %s", j.Args)
 	}
 }
 

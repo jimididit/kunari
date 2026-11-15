@@ -125,13 +125,12 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	// Pair agent_recovered with a prior missing alert (or operator-acked missing),
-	// an in-flight claim (alertClaimed: emit may already have chained agent_missing),
-	// or a failed recover emit retry. OperatorAcked alone is not enough.
+	// Pair agent_recovered only after a durable missing alert (or recover retry).
+	// alertClaimed alone is not enough: the emit may still Abort if Append fails.
+	// If a heartbeat clears Missing during claim, MarkMissingAlerted arms RecoverPending.
 	wasMissing := !rec.Retired && (rec.RecoverPending ||
 		(rec.Missing && rec.MissingAlerted) ||
-		(rec.OperatorAcked && rec.MissingAlerted) ||
-		rec.alertClaimed)
+		(rec.OperatorAcked && rec.MissingAlerted))
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
@@ -256,7 +255,7 @@ func (t *agentTracker) NeedsMissingAlert(id string) bool {
 // ClaimMissingAlert atomically claims the right to emit agent_missing under one
 // lock (memory-only alertClaimed). Call MarkMissingAlerted after a durable emit;
 // AbortMissingAlert if the emit fails. alertClaimed is not persisted and does not
-// count as MissingAlerted for NoteHeartbeat recovery.
+// by itself trigger agent_recovered (Append may still fail).
 func (t *agentTracker) ClaimMissingAlert(id string) bool {
 	if t == nil || id == "" {
 		return false
@@ -286,9 +285,9 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
-// Requires alertClaimed (normal emit path) or Missing (direct/test path).
-// If a heartbeat already cleared both, this is a no-op so we do not suppress
-// future alerts with a stale MissingAlerted bit.
+// Caller invokes only after a successful chain append. If a heartbeat already
+// cleared Missing (and the in-flight claim), arm RecoverPending so the next
+// heartbeat still emits agent_recovered and the chained missing is not orphaned.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -299,11 +298,11 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	if rec == nil {
 		return
 	}
-	if !rec.alertClaimed && !rec.Missing {
-		return
-	}
 	rec.alertClaimed = false
 	rec.MissingAlerted = true
+	if !rec.Missing {
+		rec.RecoverPending = true
+	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
 	} else {

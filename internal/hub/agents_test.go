@@ -81,7 +81,7 @@ func TestAgentTrackerRecoverPendingRetry(t *testing.T) {
 	}
 }
 
-func TestAgentTrackerRecoverOnInFlightClaim(t *testing.T) {
+func TestAgentTrackerRecoverPendingAfterClaimHeartbeatRace(t *testing.T) {
 	tr, err := newAgentTracker(t.TempDir(), 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -93,12 +93,18 @@ func TestAgentTrackerRecoverOnInFlightClaim(t *testing.T) {
 	if !tr.ClaimMissingAlert("agent-c") {
 		t.Fatal("expected claim")
 	}
-	// Heartbeat while alertClaimed (before Mark) must still pair recovery so a
-	// chained agent_missing is not left without agent_recovered.
+	// Heartbeat during claim must NOT recover yet (Append may still fail/Abort).
 	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
 	ev2.Host = &event.HostInfo{ID: "agent-c", Hostname: "c", OS: "linux"}
-	if !tr.NoteHeartbeat(ev2) {
-		t.Fatal("expected recovered=true for in-flight missing alert claim")
+	if tr.NoteHeartbeat(ev2) {
+		t.Fatal("in-flight claim alone must not emit recovery")
+	}
+	// Durable Mark after Append arms RecoverPending when Missing was cleared.
+	tr.MarkMissingAlerted("agent-c")
+	ev3 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev3.Host = &event.HostInfo{ID: "agent-c", Hostname: "c", OS: "linux"}
+	if !tr.NoteHeartbeat(ev3) {
+		t.Fatal("expected recovered=true via RecoverPending after durable mark")
 	}
 }
 

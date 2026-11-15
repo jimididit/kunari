@@ -468,7 +468,7 @@ func (s *jobStore) trimLocked() {
 		active := j.Status == jobStatusQueued || j.Status == jobStatusInflight || j.Status == jobStatusHubPending
 		all = append(all, pair{id: id, t: j.CreatedAt, active: active})
 	}
-	// Drop finished/expired first (oldest), then active only if still over cap.
+	// Drop finished/expired only (oldest first). Never evict queued/inflight/hub_pending.
 	sort.Slice(all, func(i, k int) bool {
 		if all[i].active != all[k].active {
 			return !all[i].active && all[k].active
@@ -477,6 +477,9 @@ func (s *jobStore) trimLocked() {
 	})
 	drop := len(all) - maxJobsPersisted
 	for i := 0; i < drop; i++ {
+		if all[i].active {
+			break
+		}
 		delete(s.jobs, all[i].id)
 	}
 }
@@ -671,12 +674,17 @@ func signJob(keys *kcrypto.KeyPair, j *Job) (string, error) {
 }
 
 // VerifyJobSig checks the job Ed25519 signature with the hub public key.
+// Does not mutate j; args normalization happens on a copy.
 func VerifyJobSig(pub ed25519.PublicKey, j *Job) error {
+	if j == nil {
+		return fmt.Errorf("nil job")
+	}
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid hub public key")
 	}
-	ensureJobArgs(j)
-	payload, err := jobSignPayload(j)
+	cp := *j
+	ensureJobArgs(&cp)
+	payload, err := jobSignPayload(&cp)
 	if err != nil {
 		return err
 	}
