@@ -47,6 +47,9 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	if len(leased) != 0 {
 		t.Fatalf("expected lease to suppress re-pull, got %d", len(leased))
 	}
+	if _, err := s.Complete("agent-a", j.ID+"-missing", `{"ok":true}`, ""); err == nil {
+		t.Fatal("complete unknown job must fail")
+	}
 	done, err := s.Complete("agent-a", j.ID, `{"ok":true}`, "")
 	if err != nil || done.Status != jobStatusDone {
 		t.Fatalf("complete: %v %+v", err, done)
@@ -54,6 +57,22 @@ func TestJobStoreEnqueuePullComplete(t *testing.T) {
 	again, _ := s.Pull("agent-a", 5)
 	if len(again) != 0 {
 		t.Fatalf("expected empty pull, got %d", len(again))
+	}
+}
+
+func TestJobStoreCompleteRejectsQueued(t *testing.T) {
+	keys := testJobKeys(t)
+	s, err := newJobStore(t.TempDir(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := s.Enqueue("agent-a", VerbStatusDump, "op", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Complete("agent-a", queued.ID, `{"ok":true}`, "")
+	if err != nil || got.Status != jobStatusQueued {
+		t.Fatalf("complete queued must no-op: %v %+v", err, got)
 	}
 }
 

@@ -267,8 +267,8 @@ func (s *jobStore) completeJob(agentID, jobID, result, errMsg string, hubSide bo
 			cp := *j
 			return &cp, nil
 		}
-	} else if j.Status != jobStatusQueued && j.Status != jobStatusInflight {
-		// Agents must not finalize hub_pending (or already-finished) jobs.
+	} else if j.Status != jobStatusInflight {
+		// Agents may only complete jobs they pulled (inflight), not queued/hub_pending.
 		cp := *j
 		return &cp, nil
 	}
