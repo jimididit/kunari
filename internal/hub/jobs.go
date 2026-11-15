@@ -245,6 +245,15 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 }
 
 func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error) {
+	return s.completeJob(agentID, jobID, result, errMsg, false, "")
+}
+
+// CompleteHub finalizes hub-side jobs (hub_pending); agents cannot call this path.
+func (s *jobStore) CompleteHub(agentID, jobID, result, errMsg, actor string) (*Job, error) {
+	return s.completeJob(agentID, jobID, result, errMsg, true, actor)
+}
+
+func (s *jobStore) completeJob(agentID, jobID, result, errMsg string, hubSide bool, actor string) (*Job, error) {
 	agentID = strings.TrimSpace(agentID)
 	jobID = strings.TrimSpace(jobID)
 	s.mu.Lock()
@@ -253,7 +262,13 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 	if j == nil || j.AgentID != agentID {
 		return nil, fmt.Errorf("not found")
 	}
-	if j.Status != jobStatusQueued && j.Status != jobStatusInflight && j.Status != jobStatusHubPending {
+	if hubSide {
+		if j.Status != jobStatusHubPending {
+			cp := *j
+			return &cp, nil
+		}
+	} else if j.Status != jobStatusQueued && j.Status != jobStatusInflight {
+		// Agents must not finalize hub_pending (or already-finished) jobs.
 		cp := *j
 		return &cp, nil
 	}
@@ -272,10 +287,17 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 		j.Result = truncateRunes(result, 4000)
 		j.Error = ""
 	}
+	auditActor := "agent:" + agentID
+	if hubSide {
+		auditActor = strings.TrimSpace(actor)
+		if auditActor == "" {
+			auditActor = "hub"
+		}
+	}
 	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
 		At:      now,
-		Actor:   "agent:" + agentID,
+		Actor:   auditActor,
 		AgentID: agentID,
 		JobID:   jobID,
 		Verb:    j.Verb,
@@ -472,14 +494,45 @@ func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
 }
 
 // unescapeJSONHTML reverses encoding/json's EscapeHTML substitutions.
+// Only rewrites \u003c/\u003e/\u0026 that are not preceded by an odd number of
+// backslashes, so a literal "\u0026" in args (encoded as \\u0026) stays intact.
 func unescapeJSONHTML(b []byte) []byte {
 	if !bytes.Contains(b, []byte(`\u00`)) {
 		return b
 	}
-	b = bytes.ReplaceAll(b, []byte(`\u003c`), []byte(`<`))
-	b = bytes.ReplaceAll(b, []byte(`\u003e`), []byte(`>`))
-	b = bytes.ReplaceAll(b, []byte(`\u0026`), []byte(`&`))
-	return b
+	s := string(b)
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); {
+		if i+6 <= len(s) && s[i] == '\\' && s[i+1] == 'u' && !oddBackslashesBefore(s, i) {
+			switch s[i : i+6] {
+			case `\u003c`:
+				out.WriteByte('<')
+				i += 6
+				continue
+			case `\u003e`:
+				out.WriteByte('>')
+				i += 6
+				continue
+			case `\u0026`:
+				out.WriteByte('&')
+				i += 6
+				continue
+			}
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	return []byte(out.String())
+}
+
+func oddBackslashesBefore(s string, i int) bool {
+	n := 0
+	for i > 0 && s[i-1] == '\\' {
+		n++
+		i--
+	}
+	return n%2 == 1
 }
 
 // jobSignPayload builds a length-prefixed, unambiguous message for Ed25519.

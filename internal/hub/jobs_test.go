@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,19 @@ func TestVerifyJobSigRejectsBadPubkey(t *testing.T) {
 	}
 }
 
+func TestUnescapeJSONHTMLPreservesLiteralBackslashU(t *testing.T) {
+	in := []byte(`{"x":"\\u0026\\u003c"}`)
+	out := unescapeJSONHTML(in)
+	if !bytes.Equal(out, in) {
+		t.Fatalf("literal \\uXXXX corrupted: %s", out)
+	}
+	in2 := []byte(`{"x":"a\u0026b"}`)
+	out2 := unescapeJSONHTML(in2)
+	if string(out2) != `{"x":"a&b"}` {
+		t.Fatalf("HTML escape not undone: %s", out2)
+	}
+}
+
 func TestJobSigSurvivesHTMLCharsAndJSONTransport(t *testing.T) {
 	keys := testJobKeys(t)
 	s, err := newJobStore(t.TempDir(), keys)
@@ -144,9 +158,15 @@ func TestJobStoreAckMissingNotPullable(t *testing.T) {
 	if err != nil || len(got) != 0 {
 		t.Fatalf("ack_missing must not be pullable: %v %+v", err, got)
 	}
-	done, err := s.Complete("agent-a", j.ID, "acked by operator", "")
+	if got, err := s.Complete("agent-a", j.ID, "spoof", ""); err != nil || got.Status != jobStatusHubPending {
+		t.Fatalf("agent Complete must not finalize hub_pending: %v %+v", err, got)
+	}
+	done, err := s.CompleteHub("agent-a", j.ID, "acked by operator", "", "operator")
 	if err != nil || done.Status != jobStatusDone {
 		t.Fatalf("complete hub_pending: %v %+v", err, done)
+	}
+	if len(s.Audit(5)) == 0 || !strings.Contains(s.Audit(5)[0].Actor, "operator") {
+		t.Fatalf("hub complete audit actor: %+v", s.Audit(5))
 	}
 }
 

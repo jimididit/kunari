@@ -168,14 +168,14 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		ackErr := h.agents.AckMissing(agentID)
 		h.agentMu.Unlock()
 		if ackErr != nil {
-			done, _ := h.jobs.Complete(agentID, j.ID, "", ackErr.Error())
+			done, _ := h.jobs.CompleteHub(agentID, j.ID, "", ackErr.Error(), actor)
 			if done != nil {
 				j = done
 			}
 			http.Error(w, ackErr.Error(), http.StatusBadRequest)
 			return
 		}
-		done, cerr := h.jobs.Complete(agentID, j.ID, "acked by operator", "")
+		done, cerr := h.jobs.CompleteHub(agentID, j.ID, "acked by operator", "", actor)
 		if cerr != nil {
 			http.Error(w, cerr.Error(), http.StatusInternalServerError)
 			return

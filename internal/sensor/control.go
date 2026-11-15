@@ -3,6 +3,7 @@ package sensor
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -193,13 +194,44 @@ func canonicalJobArgs(args json.RawMessage) (json.RawMessage, error) {
 	if err := json.Compact(&buf, args); err != nil {
 		return nil, fmt.Errorf("args: %w", err)
 	}
-	b := buf.Bytes()
-	if bytes.Contains(b, []byte(`\u00`)) {
-		b = bytes.ReplaceAll(b, []byte(`\u003c`), []byte(`<`))
-		b = bytes.ReplaceAll(b, []byte(`\u003e`), []byte(`>`))
-		b = bytes.ReplaceAll(b, []byte(`\u0026`), []byte(`&`))
+	return json.RawMessage(unescapeJobJSONHTML(buf.Bytes())), nil
+}
+
+func unescapeJobJSONHTML(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`\u00`)) {
+		return b
 	}
-	return json.RawMessage(b), nil
+	s := string(b)
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); {
+		if i+6 <= len(s) && s[i] == '\\' && s[i+1] == 'u' {
+			n := 0
+			for j := i; j > 0 && s[j-1] == '\\'; {
+				n++
+				j--
+			}
+			if n%2 == 0 {
+				switch s[i : i+6] {
+				case `\u003c`:
+					out.WriteByte('<')
+					i += 6
+					continue
+				case `\u003e`:
+					out.WriteByte('>')
+					i += 6
+					continue
+				case `\u0026`:
+					out.WriteByte('&')
+					i += 6
+					continue
+				}
+			}
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	return []byte(out.String())
 }
 
 func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, error) {

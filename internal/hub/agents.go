@@ -266,6 +266,8 @@ func (t *agentTracker) ClaimMissingAlert(id string) bool {
 }
 
 // AbortMissingAlert rolls back a ClaimMissingAlert when the durable emit failed.
+// Always clears MissingAlerted, including when OperatorAcked flipped mid-emit,
+// so a failed emit cannot forge agent_recovered via a leftover alerted flag.
 func (t *agentTracker) AbortMissingAlert(id string) {
 	if t == nil || id == "" {
 		return
@@ -273,7 +275,7 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.byID[id]
-	if rec == nil || !rec.Missing || rec.OperatorAcked {
+	if rec == nil || !rec.MissingAlerted {
 		return
 	}
 	rec.MissingAlerted = false
