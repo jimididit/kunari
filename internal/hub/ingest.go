@@ -237,12 +237,11 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 			continue
 		}
 		h.subs.Broadcast(ev)
+		// Mark after chain append so enqueue failure cannot re-append duplicates.
+		h.agents.MarkMissingAlerted(rec.ID)
 		if err := h.queue.Enqueue(ev); err != nil {
 			h.log.Error("agent_missing enqueue", "agent_id", rec.ID, "err", err)
-			continue
 		}
-		// Mark alerted only after durable emit so a failed append/enqueue can retry.
-		h.agents.MarkMissingAlerted(rec.ID)
 		h.log.Info("agent missing", "agent_id", rec.ID, "hostname", rec.Hostname, "last_seen", rec.LastSeen)
 		h.mu.Lock()
 		h.hits++
@@ -252,6 +251,8 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 }
 
 // emitAgentRecoveredLocked requires h.agentMu held by the caller.
+// Returns an error only when the chain append fails (safe to retry).
+// Enqueue failure is logged but not retried - the event is already chained/broadcast.
 func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) error {
 	ev := event.New("agent_status", "hub", "agent-watch", "agent_recovered")
 	ev.Memo = "sentinel heartbeat resumed"
@@ -274,7 +275,6 @@ func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) error {
 	h.subs.Broadcast(ev)
 	if err := h.queue.Enqueue(ev); err != nil {
 		h.log.Error("agent_recovered enqueue", "err", err)
-		return err
 	}
 	h.mu.Lock()
 	h.hits++
