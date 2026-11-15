@@ -282,8 +282,9 @@ func (t *agentTracker) AbortMissingAlert(id string) {
 }
 
 // MarkMissingAlerted records that a missing-agent alert was durably emitted.
-// Always sets MissingAlerted after a successful chain append (caller holds agentMu
-// so heartbeat/ack cannot interleave). NoteHeartbeat clears it and pairs recovery.
+// Requires alertClaimed (normal emit path) or Missing (direct/test path).
+// If a heartbeat already cleared both, this is a no-op so we do not suppress
+// future alerts with a stale MissingAlerted bit.
 func (t *agentTracker) MarkMissingAlerted(id string) {
 	if t == nil || id == "" {
 		return
@@ -292,6 +293,9 @@ func (t *agentTracker) MarkMissingAlerted(id string) {
 	defer t.mu.Unlock()
 	rec := t.byID[id]
 	if rec == nil {
+		return
+	}
+	if !rec.alertClaimed && !rec.Missing {
 		return
 	}
 	rec.alertClaimed = false

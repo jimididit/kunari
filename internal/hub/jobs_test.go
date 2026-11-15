@@ -233,6 +233,20 @@ func TestJobArgsNeverNullOnWire(t *testing.T) {
 	if bytes.Contains(buf.Bytes(), []byte(`"args":null`)) || !bytes.Contains(buf.Bytes(), []byte(`"args":{}`)) {
 		t.Fatalf("args must serialize as {}: %s", buf.Bytes())
 	}
+	// Omitted/null args after transport still verify.
+	j2 := *j
+	j2.Args = nil
+	var wire bytes.Buffer
+	_ = json.NewEncoder(&wire).Encode(map[string]any{"jobs": []Job{j2}})
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(wire.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyJobSig(keys.Public, &out.Jobs[0]); err != nil {
+		t.Fatalf("omitted args must still verify: %v args=%q", err, out.Jobs[0].Args)
+	}
 }
 
 func TestJobStoreRejectsUnknownVerb(t *testing.T) {

@@ -163,7 +163,7 @@ func (r *Runner) verifyJob(j *controlJob) error {
 		return fmt.Errorf("hub pubkey not configured")
 	}
 	args := j.Args
-	if len(args) == 0 {
+	if len(args) == 0 || string(args) == "null" {
 		args = json.RawMessage(`{}`)
 	}
 	compacted, err := canonicalJobArgs(args)
@@ -186,7 +186,7 @@ func (r *Runner) verifyJob(j *controlJob) error {
 }
 
 func canonicalJobArgs(args json.RawMessage) (json.RawMessage, error) {
-	if len(args) == 0 {
+	if len(args) == 0 || string(args) == "null" {
 		return json.RawMessage(`{}`), nil
 	}
 	if !json.Valid(args) {

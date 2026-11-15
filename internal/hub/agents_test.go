@@ -29,6 +29,9 @@ func TestAgentTrackerMissingAndRecovery(t *testing.T) {
 	if got := tr.CheckMissing(time.Now().UTC().Add(250 * time.Millisecond)); len(got) != 1 {
 		t.Fatalf("expected retry candidate before mark, got %#v", got)
 	}
+	if !tr.ClaimMissingAlert("agent-1") {
+		t.Fatal("expected claim before mark")
+	}
 	tr.MarkMissingAlerted("agent-1")
 	if got := tr.CheckMissing(time.Now().UTC().Add(300 * time.Millisecond)); len(got) != 0 {
 		t.Fatalf("expected no re-alert after mark, got %#v", got)
@@ -92,6 +95,9 @@ func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
 	_ = tr.CheckMissing(time.Now().UTC().Add(2 * time.Minute))
 	if !tr.NeedsMissingAlert("agent-n") {
 		t.Fatal("stale unalerted agent should need missing alert")
+	}
+	if !tr.ClaimMissingAlert("agent-n") {
+		t.Fatal("expected claim before mark")
 	}
 	tr.MarkMissingAlerted("agent-n")
 	if tr.NeedsMissingAlert("agent-n") {

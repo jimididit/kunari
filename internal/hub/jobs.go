@@ -58,7 +58,7 @@ type Job struct {
 	ID        string          `json:"id"`
 	AgentID   string          `json:"agent_id"`
 	Verb      string          `json:"verb"`
-	Args      json.RawMessage `json:"args"` // always {}; never null (signed as {})
+	Args      json.RawMessage `json:"args"` // always non-null {}; normalized before sign/wire
 	CreatedAt time.Time       `json:"created_at"`
 	CreatedBy string          `json:"created_by,omitempty"`
 	ExpiresAt time.Time       `json:"expires_at"`
@@ -284,6 +284,7 @@ func (s *jobStore) Pull(agentID string, limit int) ([]Job, error) {
 		j.Status = jobStatusInflight
 		j.DeliveredAt = &del
 		changed = true
+		ensureJobArgs(j)
 		out = append(out, *j)
 	}
 	sort.Slice(out, func(i, k int) bool {
@@ -555,8 +556,17 @@ func writeFileAtomic(path string, b []byte) error {
 	return nil
 }
 
+func ensureJobArgs(j *Job) {
+	if j == nil {
+		return
+	}
+	if len(j.Args) == 0 || string(j.Args) == "null" {
+		j.Args = json.RawMessage(`{}`)
+	}
+}
+
 func canonicalJSONArgs(args json.RawMessage) (json.RawMessage, error) {
-	if len(args) == 0 {
+	if len(args) == 0 || string(args) == "null" {
 		return json.RawMessage(`{}`), nil
 	}
 	if !json.Valid(args) {
@@ -664,6 +674,7 @@ func VerifyJobSig(pub ed25519.PublicKey, j *Job) error {
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid hub public key")
 	}
+	ensureJobArgs(j)
 	payload, err := jobSignPayload(j)
 	if err != nil {
 		return err
