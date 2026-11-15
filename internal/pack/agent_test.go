@@ -281,6 +281,8 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 		"Apply-VisibleSACL",
 		"Resolve-InteractiveProfile",
 		"UTF8Encoding",
+		"mklink /H",
+		"Authenticated Users:R",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.ps1 missing %q", needle)
@@ -334,15 +336,22 @@ func TestBuildAgentLinuxVisibleUnderNoPython(t *testing.T) {
 		"install_visible_decoy",
 		"patch_sentinel_watch",
 		"safe_rm_visible_file",
-		"grant_group_read_path",
-		"SupplementaryGroups=",
 		"run_as_user",
 		"jq is required",
 		"printf '%s'",
+		"hardlink",
+		"SUDO_USER",
+		"refusing to guess",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("install.sh missing %q", needle)
 		}
+	}
+	if strings.Contains(body, "SupplementaryGroups=") {
+		t.Fatal("linux visible install must not join the interactive user's group")
+	}
+	if strings.Contains(body, "awk -F:") {
+		t.Fatal("linux visible install must not guess an arbitrary uid>=1000 user")
 	}
 	if strings.Contains(body, "printf '%%s'") {
 		t.Fatal("install.sh must not emit literal percent-percent-s from Go escaping mistake")

@@ -2,8 +2,9 @@ package pack
 
 // unixVisibleShellHelpers is embedded into Linux/Darwin install and uninstall scripts.
 // Visible decoys are created/copied as the interactive user (no root write into a
-// user-writable tree). Linux grants service access via the owner's group +
-// systemd SupplementaryGroups. sentinel.json patches require jq.
+// user-writable tree). Linux hardlinks the decoy into the private prefix so the
+// service can watch/read it without joining the user's group. sentinel.json
+// patches require jq.
 func unixVisibleShellHelpers() string {
 	// NOTE: this string is inserted via fmt %s and is NOT re-parsed as a format
 	// string, so keep single "%" for shell printf/stat formats.
@@ -95,28 +96,6 @@ install_visible_decoy() {
   if [[ ! -f "$dest" ]]; then
     echo "error: visible decoy is not a regular file after install: $dest" >&2
     exit 1
-  fi
-}
-
-# Allow service user (via owner's group) to traverse parents and read the decoy.
-grant_group_read_path() {
-  local owner="$1"
-  local home_dir="$2"
-  local watch_path="$3"
-  refuse_if_symlink "$watch_path"
-  run_as_user "$owner" chmod g+r "$watch_path"
-  local cur
-  cur="$(dirname "$watch_path")"
-  while [[ "$cur" != "/" && "$cur" != "$home_dir" ]]; do
-    refuse_if_symlink "$cur"
-    run_as_user "$owner" chmod g+x "$cur" || true
-    cur="$(dirname "$cur")"
-  done
-  refuse_if_symlink "$home_dir"
-  run_as_user "$owner" chmod g+x "$home_dir" || true
-  if [[ -d "$home_dir/Documents" ]]; then
-    refuse_if_symlink "$home_dir/Documents"
-    run_as_user "$owner" chmod g+x "$home_dir/Documents" || true
   fi
 }
 
@@ -216,6 +195,8 @@ function Invoke-AsInteractiveUser([string]$User, [string]$ScriptBody) {
   $taskName = 'KunariVisible-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
   $utf8 = New-Object System.Text.UTF8Encoding $false
   [System.IO.File]::WriteAllText($tmpPs1, $ScriptBody, $utf8)
+  # SYSTEM-created temp files are often unreadable by the interactive user.
+  $null = cmd.exe /c ('icacls "{0}" /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" "Authenticated Users:R" >nul' -f $tmpPs1)
   try {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $tmpPs1 + '"')
     $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited

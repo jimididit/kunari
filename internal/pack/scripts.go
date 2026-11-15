@@ -50,13 +50,14 @@ install -m 0600 -o kunari -g kunari "$ROOT/etc/ingest.secret" "$PREFIX/etc/inges
 install -m 0600 -o kunari -g kunari "$ROOT/decoys/"* "$PREFIX/decoys/"
 
 WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
+VISIBLE_PATH=""
 if [[ -n "$VISIBLE_UNDER" ]]; then
   TARGET_USER="$(logname 2>/dev/null || true)"
   if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
-    TARGET_USER="$(awk -F: '$3>=1000 && $1!="nobody"{print $1; exit}' /etc/passwd)"
+    TARGET_USER="${SUDO_USER:-}"
   fi
-  if [[ -z "$TARGET_USER" ]]; then
-    echo "error: could not resolve interactive user for --visible-under" >&2
+  if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+    echo "error: could not resolve interactive user for --visible-under (need logname or SUDO_USER; refusing to guess)" >&2
     exit 1
   fi
   HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
@@ -67,11 +68,15 @@ if [[ -n "$VISIBLE_UNDER" ]]; then
   refuse_if_symlink "$HOME_DIR"
   DOCS_ROOT="$HOME_DIR/Documents"
   VISIBLE_DIR="$(ensure_visible_dir "$DOCS_ROOT" "$VISIBLE_UNDER" "$TARGET_USER")"
-  WATCH_PATH="$VISIBLE_DIR/$DECOY_BASE"
-  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$WATCH_PATH" "$TARGET_USER"
-  # Service user joins the owner's group (SupplementaryGroups below); no POSIX ACL changes.
-  grant_group_read_path "$TARGET_USER" "$HOME_DIR" "$WATCH_PATH"
-  VISIBLE_OWNER_GID="$(id -g "$TARGET_USER")"
+  VISIBLE_PATH="$VISIBLE_DIR/$DECOY_BASE"
+  install_visible_decoy "$ROOT/decoys/$DECOY_BASE" "$VISIBLE_PATH" "$TARGET_USER"
+  # Hardlink into the private prefix so the service can watch/read without joining the user's group.
+  rm -f -- "$PREFIX/decoys/$DECOY_BASE"
+  if ! ln "$VISIBLE_PATH" "$PREFIX/decoys/$DECOY_BASE"; then
+    echo "error: hardlink failed; Documents and $PREFIX must be on the same filesystem" >&2
+    exit 1
+  fi
+  WATCH_PATH="$PREFIX/decoys/$DECOY_BASE"
   PLACEHOLDER="__KUNARI_VISIBLE__/${VISIBLE_UNDER}/${DECOY_BASE}"
   patch_sentinel_watch "$PREFIX/etc/sentinel.json" "$WATCH_PATH" "$PLACEHOLDER"
   chown kunari:kunari "$PREFIX/etc/sentinel.json"
@@ -83,20 +88,12 @@ if [[ "$UNIT_NAME" != "kunari-sentinel" ]] && [[ -f /etc/systemd/system/kunari-s
   systemctl disable --now kunari-sentinel.service 2>/dev/null || true
   rm -f /etc/systemd/system/kunari-sentinel.service
 fi
-if [[ -n "${VISIBLE_OWNER_GID:-}" ]]; then
-  awk -v gid="$VISIBLE_OWNER_GID" '
-    /^\[Service\]$/ { print; print "SupplementaryGroups=" gid; next }
-    { print }
-  ' "$ROOT/$UNIT_FILE" > "/etc/systemd/system/$UNIT_FILE"
-  chmod 0644 "/etc/systemd/system/$UNIT_FILE"
-else
-  install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
-fi
+install -m 0644 "$ROOT/$UNIT_FILE" "/etc/systemd/system/$UNIT_FILE"
 systemctl daemon-reload
 systemctl enable --now "$UNIT_FILE"
 echo "installed under $PREFIX; service $UNIT_NAME started"
 if [[ -n "$VISIBLE_UNDER" ]]; then
-  echo "watching visible decoy: $WATCH_PATH"
+  echo "visible decoy: $VISIBLE_PATH (hardlinked; sentinel watches $WATCH_PATH)"
 fi
 `, pq, bq, uq, vq, dq, helpers)
 }
@@ -124,13 +121,15 @@ systemctl daemon-reload 2>/dev/null || true
 if [[ -n "$VISIBLE_UNDER" ]]; then
   TARGET_USER="$(logname 2>/dev/null || true)"
   if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
-    TARGET_USER="$(awk -F: '$3>=1000 && $1!="nobody"{print $1; exit}' /etc/passwd)"
+    TARGET_USER="${SUDO_USER:-}"
   fi
-  if [[ -n "$TARGET_USER" ]]; then
+  if [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]]; then
     HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
     if [[ -n "$HOME_DIR" ]]; then
       safe_rm_visible_file "$TARGET_USER" "$HOME_DIR/Documents" "$VISIBLE_UNDER/$DECOY_BASE"
     fi
+  else
+    echo "warning: skipping visible decoy removal; could not resolve interactive user" >&2
   fi
 fi
 rm -rf "$PREFIX"
@@ -377,17 +376,26 @@ if ($VisibleUnder -ne '') {
   $console = (Get-CimInstance Win32_ComputerSystem).UserName
   $userProfile = Resolve-InteractiveProfile $console
   $docsRoot = Join-Path $userProfile 'Documents'
-  # Create/copy as the interactive user (no SYSTEM ACL lock races in Documents).
+  # Create/copy as the interactive user (no SYSTEM writes into Documents).
   $VisibleDir = Ensure-VisibleDir $docsRoot $VisibleUnder $console
   $WatchPath = Join-Path $VisibleDir $DecoyBase
   Install-VisibleDecoy (Join-Path $Root ('decoys\' + $DecoyBase)) $WatchPath $console
+  # Hardlink into the private prefix; apply SACL there (not via a user-writable parent).
+  $PrefixDecoy = Join-Path $Prefix ('decoys\' + $DecoyBase)
+  if (Test-Path -LiteralPath $PrefixDecoy) {
+    Remove-Item -LiteralPath $PrefixDecoy -Force
+  }
+  $null = cmd.exe /c ('mklink /H "{0}" "{1}"' -f $PrefixDecoy, $WatchPath)
+  if (-not (Test-Path -LiteralPath $PrefixDecoy)) {
+    throw ("hardlink failed; Documents and {0} must be on the same volume" -f $Prefix)
+  }
+  Apply-VisibleSACL $PrefixDecoy
   $cfgPath = Join-Path $Prefix 'etc\sentinel.json'
   $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+  # Watch the Documents path so 4663 ObjectName matches the user's open.
   $cfg.targets[0].path = $WatchPath
-  # UTF-8 without BOM (Windows PowerShell's utf8 encoding writes a BOM).
   $utf8 = New-Object System.Text.UTF8Encoding $false
   [System.IO.File]::WriteAllText($cfgPath, (($cfg | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $utf8)
-  Apply-VisibleSACL $WatchPath
 }
 
 $Bin = Join-Path $Prefix ('bin\' + $BinName)
