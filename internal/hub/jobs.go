@@ -177,6 +177,7 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 // (never queued/hub_pending, so agents cannot pull or race it).
 func (s *jobStore) EnqueueCompleted(agentID, verb, createdBy string, args json.RawMessage, result, errMsg, actor string) (*Job, error) {
 	agentID = strings.TrimSpace(agentID)
+	verb = strings.TrimSpace(verb)
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id required")
 	}
