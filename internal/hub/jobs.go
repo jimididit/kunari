@@ -146,8 +146,8 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		j.DoneAt = &now
 		detail = jobStatusDone
 	}
+	s.trimLocked() // free room before insert so rollback does not fight trim
 	s.jobs[j.ID] = j
-	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
 		At:      now,
 		Actor:   createdBy,
@@ -156,10 +156,9 @@ func (s *jobStore) Enqueue(agentID, verb, createdBy string, args json.RawMessage
 		Verb:    verb,
 		Detail:  detail,
 	})
-	s.trimLocked()
 	if err := s.persistLocked(); err != nil {
 		delete(s.jobs, j.ID)
-		s.audit = s.audit[:auditLen]
+		s.removeAuditJobLocked(j.ID)
 		return nil, err
 	}
 	cp := *j
@@ -238,15 +237,22 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 		cp := *j
 		return &cp, nil
 	}
+	prevStatus := j.Status
+	prevResult := j.Result
+	prevError := j.Error
+	prevDoneAt := j.DoneAt
 	now := time.Now().UTC()
 	j.DoneAt = &now
 	if errMsg != "" {
 		j.Status = jobStatusFailed
 		j.Error = truncateRunes(errMsg, 500)
+		j.Result = ""
 	} else {
 		j.Status = jobStatusDone
 		j.Result = truncateRunes(result, 4000)
+		j.Error = ""
 	}
+	auditLen := len(s.audit)
 	s.audit = append(s.audit, AuditEntry{
 		At:      now,
 		Actor:   "agent:" + agentID,
@@ -255,10 +261,16 @@ func (s *jobStore) Complete(agentID, jobID, result, errMsg string) (*Job, error)
 		Verb:    j.Verb,
 		Detail:  j.Status,
 	})
-	s.trimLocked()
 	if err := s.persistLocked(); err != nil {
+		j.Status = prevStatus
+		j.Result = prevResult
+		j.Error = prevError
+		j.DoneAt = prevDoneAt
+		s.audit = s.audit[:auditLen]
 		return nil, err
 	}
+	s.trimLocked()
+	_ = s.persistLocked() // best-effort trim persist; completion already durable
 	cp := *j
 	return &cp, nil
 }
@@ -323,19 +335,36 @@ func (s *jobStore) PendingCount() int {
 	return n
 }
 
+func (s *jobStore) removeAuditJobLocked(jobID string) {
+	for i := len(s.audit) - 1; i >= 0; i-- {
+		if s.audit[i].JobID == jobID {
+			s.audit = append(s.audit[:i], s.audit[i+1:]...)
+			return
+		}
+	}
+}
+
 func (s *jobStore) trimLocked() {
 	if len(s.jobs) <= maxJobsPersisted {
 		return
 	}
 	type pair struct {
-		id string
-		t  time.Time
+		id     string
+		t      time.Time
+		active bool // queued/inflight - prefer keep
 	}
 	var all []pair
 	for id, j := range s.jobs {
-		all = append(all, pair{id: id, t: j.CreatedAt})
+		active := j.Status == jobStatusQueued || j.Status == jobStatusInflight
+		all = append(all, pair{id: id, t: j.CreatedAt, active: active})
 	}
-	sort.Slice(all, func(i, k int) bool { return all[i].t.Before(all[k].t) })
+	// Drop finished/expired first (oldest), then active only if still over cap.
+	sort.Slice(all, func(i, k int) bool {
+		if all[i].active != all[k].active {
+			return !all[i].active && all[k].active
+		}
+		return all[i].t.Before(all[k].t)
+	})
 	drop := len(all) - maxJobsPersisted
 	for i := 0; i < drop; i++ {
 		delete(s.jobs, all[i].id)
@@ -419,7 +448,8 @@ func signJob(secret []byte, j *Job) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	// Domain-separated from ingest body HMAC (timestamp+"."+body).
+	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(payload))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil)), nil

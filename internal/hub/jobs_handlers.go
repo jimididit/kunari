@@ -59,11 +59,11 @@ func (h *Hub) requireIngestHMAC(w http.ResponseWriter, r *http.Request) ([]byte,
 }
 
 func (h *Hub) agentMayPullJobs(agentID string) bool {
-	// Residual risk: the ingest HMAC is shared across agents on an engagement, so a
-	// compromised agent can still claim another agent_id. KnownRecently raises the bar
-	// (id must have heartbeated recently). Per-agent secrets are a later hardening.
+	// Fail closed when agent watch is off: otherwise any holder of the shared ingest
+	// secret could pull jobs for arbitrary agent_ids with no heartbeat gate.
+	// Residual risk remains across agents that share the secret and have heartbeated.
 	if h.agents == nil || !h.agents.enabled() {
-		return true
+		return false
 	}
 	return h.agents.KnownRecently(agentID, 24*time.Hour)
 }

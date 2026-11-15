@@ -163,7 +163,7 @@ func (r *Runner) verifyJob(j *controlJob) error {
 	if err := json.Compact(&compact, args); err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
-	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + compact.String() + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + compact.String() + "\n" + j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, r.hubSecret)
 	mac.Write([]byte(payload))
 	want := mac.Sum(nil)

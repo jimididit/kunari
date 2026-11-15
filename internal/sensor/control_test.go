@@ -18,7 +18,7 @@ func TestVerifyJobAllowlistAndSig(t *testing.T) {
 		ID: "job-1", AgentID: "a1", Verb: verbStatusDump,
 		Args: args, ExpiresAt: exp,
 	}
-	payload := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
+	payload := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(payload))
 	j.Sig = "sha256=" + hex.EncodeToString(mac.Sum(nil))
@@ -26,7 +26,7 @@ func TestVerifyJobAllowlistAndSig(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Verb = "shell_exec"
-	payload2 := j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
+	payload2 := "kunari.job/1\n" + j.ID + "\n" + j.AgentID + "\n" + j.Verb + "\n" + string(args) + "\n" + exp.Format(time.RFC3339Nano)
 	mac2 := hmac.New(sha256.New, secret)
 	mac2.Write([]byte(payload2))
 	j.Sig = "sha256=" + hex.EncodeToString(mac2.Sum(nil))
