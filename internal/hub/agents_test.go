@@ -81,6 +81,27 @@ func TestAgentTrackerRecoverPendingRetry(t *testing.T) {
 	}
 }
 
+func TestAgentTrackerRecoverOnInFlightClaim(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-c", Hostname: "c", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	_ = tr.CheckMissing(time.Now().UTC().Add(100 * time.Millisecond))
+	if !tr.ClaimMissingAlert("agent-c") {
+		t.Fatal("expected claim")
+	}
+	// Heartbeat while alertClaimed (before Mark) must still pair recovery so a
+	// chained agent_missing is not left without agent_recovered.
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-c", Hostname: "c", OS: "linux"}
+	if !tr.NoteHeartbeat(ev2) {
+		t.Fatal("expected recovered=true for in-flight missing alert claim")
+	}
+}
+
 func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
 	tr, err := newAgentTracker(t.TempDir(), time.Minute)
 	if err != nil {

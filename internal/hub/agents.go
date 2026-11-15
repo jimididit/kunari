@@ -125,9 +125,13 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	// Pair agent_recovered with a prior missing alert (or operator-acked missing), or retry a failed recover emit.
-	// OperatorAcked alone is not enough - AckMissing only sets it when the agent was actually stale/missing.
-	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending || (rec.OperatorAcked && rec.MissingAlerted))
+	// Pair agent_recovered with a prior missing alert (or operator-acked missing),
+	// an in-flight claim (alertClaimed: emit may already have chained agent_missing),
+	// or a failed recover emit retry. OperatorAcked alone is not enough.
+	wasMissing := !rec.Retired && (rec.RecoverPending ||
+		(rec.Missing && rec.MissingAlerted) ||
+		(rec.OperatorAcked && rec.MissingAlerted) ||
+		rec.alertClaimed)
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
