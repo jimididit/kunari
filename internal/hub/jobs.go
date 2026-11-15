@@ -371,7 +371,8 @@ func (s *jobStore) trimLocked() {
 }
 
 func (s *jobStore) load(dataDir string) error {
-	if b, err := os.ReadFile(s.path); err == nil { // #nosec G304
+	b, err := os.ReadFile(s.path) // #nosec G304 -- path under safepath-cleaned data_dir
+	if err == nil {
 		var doc jobStoreFile
 		if err := json.Unmarshal(b, &doc); err != nil {
 			return err
@@ -388,7 +389,8 @@ func (s *jobStore) load(dataDir string) error {
 	// Migrate legacy split files from earlier Phase E builds (paths under safepath-cleaned dataDir).
 	legacyJobs := filepath.Join(dataDir, "jobs.json")
 	legacyAudit := filepath.Join(dataDir, "jobs-audit.json")
-	if b, err := os.ReadFile(legacyJobs); err == nil { // #nosec G304
+	b, err := os.ReadFile(legacyJobs) // #nosec G304 -- path under safepath-cleaned data_dir
+	if err == nil {
 		var items []Job
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err
@@ -400,7 +402,8 @@ func (s *jobStore) load(dataDir string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if b, err := os.ReadFile(legacyAudit); err == nil { // #nosec G304
+	b, err = os.ReadFile(legacyAudit) // #nosec G304 -- path under safepath-cleaned data_dir
+	if err == nil {
 		var items []AuditEntry
 		if err := json.Unmarshal(b, &items); err != nil {
 			return err

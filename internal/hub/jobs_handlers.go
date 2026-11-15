@@ -147,13 +147,9 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := "operator"
-	j, err := h.jobs.Enqueue(agentID, req.Verb, actor, req.Args)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// ack_missing is hub-side: clear Missing immediately so operators need not wait for a pull.
-	if j.Verb == VerbAckMissing {
+	// ack_missing is hub-side: apply AckMissing before enqueue so a rejected ack
+	// never leaves a durable "acked" job behind.
+	if strings.TrimSpace(req.Verb) == VerbAckMissing {
 		if h.agents == nil {
 			http.Error(w, "agent watch disabled", http.StatusBadRequest)
 			return
@@ -165,6 +161,11 @@ func (h *Hub) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	}
+	j, err := h.jobs.Enqueue(agentID, req.Verb, actor, req.Args)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
