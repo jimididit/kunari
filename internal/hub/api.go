@@ -126,9 +126,6 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	if limit > 500 {
-		limit = 500
-	}
 	hostID := strings.TrimSpace(q.Get("host_id"))
 	excludeHB := q.Get("exclude_heartbeats") == "1" || q.Get("exclude_heartbeats") == "true"
 	// latest=1: return the newest matches (sliding window). Default filtered
@@ -136,6 +133,10 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	latest := q.Get("latest") == "1" || q.Get("latest") == "true"
 
 	if hostID != "" || excludeHB || latest {
+		// Cap only the filtered/latest scan path; unfiltered listing keeps caller limit.
+		if limit > 500 {
+			limit = 500
+		}
 		matched, nextSeq, err := h.scanEvents(after, limit, hostID, excludeHB, latest)
 		if err != nil {
 			h.log.Error("list events", "err", err)
