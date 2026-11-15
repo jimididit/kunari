@@ -37,6 +37,7 @@ func TestParse4663XML(t *testing.T) {
   <System>
     <EventID>4663</EventID>
     <EventRecordID>1001</EventRecordID>
+    <TimeCreated SystemTime="2026-11-15T12:00:00.000000000Z"/>
   </System>
   <EventData>
     <Data Name="ObjectName">\\?\C:\lab\decoy.env</Data>
@@ -48,6 +49,7 @@ func TestParse4663XML(t *testing.T) {
   <System>
     <EventID>4663</EventID>
     <EventRecordID>1002</EventRecordID>
+    <TimeCreated SystemTime="2026-11-15T12:01:00Z"/>
   </System>
   <EventData>
     <Data Name="ObjectName">C:\lab\decoy.env</Data>
@@ -64,6 +66,12 @@ func TestParse4663XML(t *testing.T) {
 	}
 	if got[0].Extra["event_record_id"] != "1001" || got[1].Extra["event_record_id"] != "1002" {
 		t.Fatalf("ids %q %q", got[0].Extra["event_record_id"], got[1].Extra["event_record_id"])
+	}
+	if got[0].Extra["event_time"] == "" || got[1].Extra["event_time"] == "" {
+		t.Fatal("expected event_time from TimeCreated")
+	}
+	if ts, ok := touchEventTime(got[0]); !ok || ts.Year() != 2026 {
+		t.Fatalf("touchEventTime got %v ok=%v", ts, ok)
 	}
 }
 

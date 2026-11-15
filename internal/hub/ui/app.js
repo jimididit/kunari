@@ -329,37 +329,31 @@
           if (ev.target && ev.target.closest && ev.target.closest("button")) return;
           openAgentDrawer(a);
         });
-        var cells = [
-          a.agent_label || "",
-          a.hostname || "(unknown)",
-          a.engagement || "",
-          a.missing ? "missing" : "ok",
-          a.os || "",
-          a.tier || "",
-          a.watch_count ? String(a.watch_count) : "",
-          a.capabilities || "",
-          a.agent_version || "",
-          fmtRelative(a.last_seen),
-          shortID(a.id),
+        var cols = [
+          { text: a.agent_label || "" },
+          { text: a.hostname || "(unknown)" },
+          { text: a.engagement || "" },
+          { text: a.missing ? "missing" : "ok", pill: a.missing ? "bad" : "ok" },
+          { text: a.os || "" },
+          { text: a.tier || "" },
+          { text: a.watch_count ? String(a.watch_count) : "" },
+          { text: a.capabilities || "", className: "caps", title: a.capabilities || "" },
+          { text: a.agent_version || "" },
+          { text: fmtRelative(a.last_seen), title: fmtTime(a.last_seen) },
+          { text: shortID(a.id), className: "mono", title: a.id || "" },
         ];
-        for (var k = 0; k < cells.length; k++) {
+        for (var k = 0; k < cols.length; k++) {
+          var col = cols[k];
           var td = document.createElement("td");
-          if (k === 3) {
+          if (col.pill) {
             var pill = document.createElement("span");
-            pill.className = "pill " + (a.missing ? "bad" : "ok");
-            pill.textContent = cells[k];
+            pill.className = "pill " + col.pill;
+            pill.textContent = col.text;
             td.appendChild(pill);
           } else {
-            if (k === 7) {
-              td.title = a.capabilities || "";
-              td.className = "caps";
-            }
-            if (k === 9) td.title = fmtTime(a.last_seen);
-            if (k === 10) {
-              td.className = "mono";
-              td.title = a.id || "";
-            }
-            td.textContent = cells[k];
+            if (col.className) td.className = col.className;
+            if (col.title) td.title = col.title;
+            td.textContent = col.text;
           }
           tr.appendChild(td);
         }

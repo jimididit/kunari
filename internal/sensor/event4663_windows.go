@@ -21,6 +21,7 @@ type event4663Watcher struct {
 	hash    string
 	seen    map[string]struct{}
 	seenQ   []string
+	started time.Time
 }
 
 func newEvent4663(targets []Target) (*event4663Watcher, error) {
@@ -39,6 +40,7 @@ func newEvent4663(targets []Target) (*event4663Watcher, error) {
 		targets: targets,
 		hash:    hex.EncodeToString(sum[:]),
 		seen:    map[string]struct{}{},
+		started: time.Now().UTC(),
 	}, nil
 }
 
@@ -89,7 +91,8 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	bootstrapped := false
+	// Accept a small clock skew so touches during startup still emit.
+	floor := w.started.Add(-2 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,19 +102,7 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 			if err != nil {
 				continue
 			}
-			touches := parse4663(raw, w.targets)
-			if !bootstrapped {
-				// Seed seen with the current Security log window so a restart
-				// does not re-emit historical 4663s as fresh touches.
-				for _, touch := range touches {
-					if touch.Extra != nil {
-						_ = w.rememberRecord(touch.Extra["event_record_id"])
-					}
-				}
-				bootstrapped = true
-				continue
-			}
-			for _, touch := range touches {
+			for _, touch := range parse4663(raw, w.targets) {
 				key := ""
 				if touch.Extra != nil {
 					key = touch.Extra["event_record_id"]
@@ -123,6 +114,10 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 				if w.rememberRecord(key) {
 					continue
 				}
+				// Remember historical Security log rows without re-alerting on restart.
+				if created, ok := touchEventTime(touch); ok && created.Before(floor) {
+					continue
+				}
 				select {
 				case out <- touch:
 				case <-ctx.Done():
@@ -131,6 +126,24 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 			}
 		}
 	}
+}
+
+func touchEventTime(t Touch) (time.Time, bool) {
+	if t.Extra == nil {
+		return time.Time{}, false
+	}
+	raw := strings.TrimSpace(t.Extra["event_time"])
+	if raw == "" {
+		return time.Time{}, false
+	}
+	// wevtutil SystemTime is usually RFC3339 / RFC3339Nano.
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts.UTC(), true
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts.UTC(), true
+	}
+	return time.Time{}, false
 }
 
 func probe4663() error {
@@ -264,6 +277,7 @@ func parse4663XML(raw string, targets []Target) []Touch {
 		mask := xmlDataNamed(block, "AccessMask")
 		accesses := xmlDataNamed(block, "AccessList")
 		proc := xmlDataNamed(block, "ProcessName")
+		eventTime := xmlAttr(block, "SystemTime")
 		action := mapAccessMask(mask)
 		if action == "open" {
 			if fromList := mapAccessList(accesses); fromList != "" {
@@ -274,16 +288,38 @@ func parse4663XML(raw string, targets []Target) []Touch {
 			"access_mask":     strings.TrimSpace(mask),
 			"process_name":    strings.TrimSpace(proc),
 			"event_record_id": strings.TrimSpace(recID),
+			"event_time":      strings.TrimSpace(eventTime),
+		}
+		occurred := time.Now().UTC()
+		if ts, ok := touchEventTime(Touch{Extra: extra}); ok {
+			occurred = ts
 		}
 		touches = append(touches, Touch{
 			Path:     path,
 			Action:   action,
-			Occurred: time.Now().UTC(),
+			Occurred: occurred,
 			Proven:   true,
 			Extra:    extra,
 		})
 	}
 	return touches
+}
+
+func xmlAttr(block, name string) string {
+	for _, q := range []string{`"`, `'`} {
+		needle := name + "=" + q
+		i := strings.Index(block, needle)
+		if i < 0 {
+			continue
+		}
+		rest := block[i+len(needle):]
+		end := strings.Index(rest, q)
+		if end < 0 {
+			continue
+		}
+		return strings.TrimSpace(rest[:end])
+	}
+	return ""
 }
 
 func splitXMLEvents(raw string) []string {
