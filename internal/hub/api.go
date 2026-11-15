@@ -131,10 +131,12 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	hostID := strings.TrimSpace(q.Get("host_id"))
 	excludeHB := q.Get("exclude_heartbeats") == "1" || q.Get("exclude_heartbeats") == "true"
+	// latest=1: return the newest matches (sliding window). Default filtered
+	// paging is oldest-first and stops at limit so next_seq does not skip matches.
+	latest := q.Get("latest") == "1" || q.Get("latest") == "true"
 
-	// Filtered queries keep a sliding window of the most recent matches.
 	if hostID != "" || excludeHB {
-		matched, nextSeq, err := h.scanEvents(after, limit, hostID, excludeHB)
+		matched, nextSeq, err := h.scanEvents(after, limit, hostID, excludeHB, latest)
 		if err != nil {
 			h.log.Error("list events", "err", err)
 			http.Error(w, "error", http.StatusInternalServerError)
@@ -144,10 +146,10 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"events":   matched,
 			"count":    len(matched),
-			// next_seq is the last scanned sequence (not chain tip) so clients can
-			// page without skipping unscanned events when maxScan truncates.
+			// next_seq is the last scanned sequence so clients can resume.
 			"next_seq": nextSeq,
 			"last_seq": h.chain.LastSeq(),
+			"latest":   latest,
 		})
 		return
 	}
@@ -170,9 +172,11 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// scanEvents walks the chain and returns up to limit matching events (most recent last)
-// plus the last scanned sequence for pagination.
-func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB bool) ([]event.Event, uint64, error) {
+// scanEvents walks the chain and returns up to limit matching events plus the last
+// scanned sequence. When latest is false, results are oldest-first and the scan
+// stops once limit matches are found (safe forward pagination). When latest is
+// true, a sliding window keeps the newest matches across the scan cap.
+func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB, latest bool) ([]event.Event, uint64, error) {
 	const maxScan = 10000
 	matched := make([]event.Event, 0, limit)
 	scanned := 0
@@ -198,8 +202,12 @@ func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB bool)
 				}
 			}
 			matched = append(matched, batch[i])
-			if len(matched) > limit {
-				matched = matched[len(matched)-limit:]
+			if latest {
+				if len(matched) > limit {
+					matched = matched[len(matched)-limit:]
+				}
+			} else if len(matched) >= limit {
+				return matched, nextSeq, nil
 			}
 		}
 		if len(batch) < 1000 {

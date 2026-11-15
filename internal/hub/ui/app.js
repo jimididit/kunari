@@ -290,7 +290,7 @@
       local.push(ev);
     }
     if (local.length) renderDrawerEvents(local.slice(0, 40));
-    api("/api/v1/events?host_id=" + encodeURIComponent(agentID) + "&exclude_heartbeats=1&limit=40")
+    api("/api/v1/events?host_id=" + encodeURIComponent(agentID) + "&exclude_heartbeats=1&latest=1&limit=40")
       .then(function (data) {
         if (req !== drawerReq) return;
         renderDrawerEvents((data && data.events) || []);
