@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,12 +151,33 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 				w.persistMaxID()
 				continue
 			}
+			windowMax := uint64(0)
+			hasID := false
+			for _, touch := range touches {
+				if id, ok := parseRecordID(touch); ok {
+					hasID = true
+					if id > windowMax {
+						windowMax = id
+					}
+				}
+			}
+			// Security log clear restarts EventRecordID; reset watermark or we go blind.
+			logReset := hasID && windowMax > 0 && windowMax < w.maxID
 			baseline := w.maxID
+			if logReset {
+				baseline = 0
+				w.seen = map[string]struct{}{}
+				w.seenQ = nil
+			}
 			type pendingTouch struct {
 				id    uint64
 				touch Touch
 			}
 			var pending []pendingTouch
+			newMax := w.maxID
+			if logReset {
+				newMax = 0
+			}
 			for _, touch := range touches {
 				key := ""
 				if touch.Extra != nil {
@@ -172,20 +194,22 @@ func (w *event4663Watcher) Run(ctx context.Context, out chan<- Touch) error {
 					continue
 				}
 				pending = append(pending, pendingTouch{id: id, touch: touch})
-				if id > w.maxID {
-					w.maxID = id
+				if id > newMax {
+					newMax = id
 				}
 			}
 			sort.Slice(pending, func(i, j int) bool { return pending[i].id < pending[j].id })
-			if len(pending) > 0 {
-				w.persistMaxID()
-			}
 			for _, p := range pending {
 				select {
 				case out <- p.touch:
 				case <-ctx.Done():
 					return nil
 				}
+			}
+			// Persist only after delivery so a crash cannot skip undelivered IDs.
+			if newMax > w.maxID || logReset {
+				w.maxID = newMax
+				w.persistMaxID()
 			}
 		}
 	}
@@ -454,7 +478,7 @@ func xmlDataNamed(block, name string) string {
 		if end < 0 {
 			continue
 		}
-		return strings.TrimSpace(rest[:end])
+		return html.UnescapeString(strings.TrimSpace(rest[:end]))
 	}
 	return ""
 }

@@ -21,7 +21,7 @@ type agentView struct {
 	OS           string    `json:"os,omitempty"`
 	Tier         string    `json:"tier,omitempty"`
 	Capabilities string    `json:"capabilities,omitempty"`
-	WatchCount   int       `json:"watch_count,omitempty"`
+	WatchCount   int       `json:"watch_count"`
 	AgentVersion string    `json:"agent_version,omitempty"`
 	Engagement   string    `json:"engagement,omitempty"`
 	AgentLabel   string    `json:"agent_label,omitempty"`

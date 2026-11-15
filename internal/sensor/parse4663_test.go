@@ -202,6 +202,16 @@ func TestParse4663XMLSingleQuotedAttrs(t *testing.T) {
 	}
 }
 
+func TestParse4663XMLUnescapesObjectName(t *testing.T) {
+	raw := `<Event><System><EventRecordID>3</EventRecordID></System>` +
+		`<EventData><Data Name="ObjectName">C:\lab\a&amp;b.env</Data>` +
+		`<Data Name="AccessMask">0x1</Data></EventData></Event>`
+	got := parse4663(raw, []Target{{Path: `C:\lab\a&b.env`, TokenID: "abc"}})
+	if len(got) != 1 || got[0].Path != `C:\lab\a&b.env` {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestMapAccessMaskBits(t *testing.T) {
 	cases := []struct {
 		mask string
