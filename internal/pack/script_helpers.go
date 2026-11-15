@@ -240,12 +240,20 @@ function Invoke-AsInteractiveUser([string]$User, [string]$ScriptBody) {
     $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
+    # 267009 = SCHED_S_TASK_RUNNING; 267011 = SCHED_S_TASK_HAS_NOT_RUN.
+    # Wait for both: a fresh task reports 267011 until the engine actually starts it.
     $deadline = (Get-Date).AddSeconds(60)
     do {
       Start-Sleep -Milliseconds 200
+      $task = Get-ScheduledTask -TaskName $taskName
       $info = Get-ScheduledTaskInfo -TaskName $taskName
-    } while ($info.LastTaskResult -eq 267009 -and (Get-Date) -lt $deadline)
+      $pending = ($task.State -eq 'Running') -or ($info.LastTaskResult -eq 267009) -or ($info.LastTaskResult -eq 267011)
+    } while ($pending -and (Get-Date) -lt $deadline)
+    $task = Get-ScheduledTask -TaskName $taskName
     $info = Get-ScheduledTaskInfo -TaskName $taskName
+    if (($task.State -eq 'Running') -or ($info.LastTaskResult -eq 267009) -or ($info.LastTaskResult -eq 267011)) {
+      throw ("interactive user task did not complete (state={0} result={1})" -f $task.State, $info.LastTaskResult)
+    }
     if ($info.LastTaskResult -ne 0) {
       throw ("interactive user task failed with code {0}" -f $info.LastTaskResult)
     }

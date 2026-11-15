@@ -290,6 +290,9 @@ func TestBuildAgentWindowsVisibleUnder(t *testing.T) {
 	if strings.Contains(body, "Apply-VisibleSACL") || strings.Contains(body, "mklink /H") {
 		t.Fatal("windows visible install must not hardlink or Set-Acl user Documents paths")
 	}
+	if !strings.Contains(body, "267011") || !strings.Contains(body, "SCHED_S_TASK_HAS_NOT_RUN") {
+		t.Fatal("windows install must wait for SCHED_S_TASK_HAS_NOT_RUN, not only RUNNING")
+	}
 	if strings.Contains(body, "Lock-VisibleDir") || strings.Contains(body, "takeown") {
 		t.Fatal("windows visible install must not takeown/lock user Documents as SYSTEM")
 	}
