@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -183,18 +184,22 @@ func (r *Runner) verifyJob(j *controlJob) error {
 
 func jobSignPayload(id, agentID, verb, args string, exp time.Time) ([]byte, error) {
 	var buf bytes.Buffer
-	writeLP := func(s string) {
+	writeLP := func(s string) error {
+		n := len(s)
+		if n > math.MaxUint32 {
+			return fmt.Errorf("sign field too large")
+		}
 		var lenBuf [4]byte
-		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(n)) // #nosec G115 -- bounded by MaxUint32 check
 		buf.Write(lenBuf[:])
 		buf.WriteString(s)
+		return nil
 	}
-	writeLP("kunari.job/1")
-	writeLP(id)
-	writeLP(agentID)
-	writeLP(verb)
-	writeLP(args)
-	writeLP(exp.UTC().Format(time.RFC3339Nano))
+	for _, s := range []string{"kunari.job/1", id, agentID, verb, args, exp.UTC().Format(time.RFC3339Nano)} {
+		if err := writeLP(s); err != nil {
+			return nil, err
+		}
+	}
 	return buf.Bytes(), nil
 }
 

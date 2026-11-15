@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -478,18 +479,22 @@ func jobSignPayload(j *Job) ([]byte, error) {
 	}
 	exp := j.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	var buf bytes.Buffer
-	writeLP := func(s string) {
+	writeLP := func(s string) error {
+		n := len(s)
+		if n > math.MaxUint32 {
+			return fmt.Errorf("sign field too large")
+		}
 		var lenBuf [4]byte
-		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(n)) // #nosec G115 -- bounded by MaxUint32 check
 		buf.Write(lenBuf[:])
 		buf.WriteString(s)
+		return nil
 	}
-	writeLP("kunari.job/1")
-	writeLP(j.ID)
-	writeLP(j.AgentID)
-	writeLP(j.Verb)
-	writeLP(string(args))
-	writeLP(exp)
+	for _, s := range []string{"kunari.job/1", j.ID, j.AgentID, j.Verb, string(args), exp} {
+		if err := writeLP(s); err != nil {
+			return nil, err
+		}
+	}
 	return buf.Bytes(), nil
 }
 
