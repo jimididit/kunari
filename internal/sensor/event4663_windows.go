@@ -178,7 +178,12 @@ func winObjectNameVariants(p string) []string {
 
 func normalizeWinPath(p string) string {
 	p = strings.TrimSpace(p)
-	p = strings.TrimPrefix(p, `\\?\`)
+	// Keep UNC identity: \\?\UNC\server\share -> \\server\share
+	if strings.HasPrefix(strings.ToUpper(p), `\\?\UNC\`) {
+		p = `\\` + p[len(`\\?\UNC\`):]
+	} else {
+		p = strings.TrimPrefix(p, `\\?\`)
+	}
 	return strings.ToLower(filepath.Clean(p))
 }
 
@@ -287,23 +292,26 @@ func xmlTagText(block, tag string) string {
 }
 
 func xmlDataNamed(block, name string) string {
-	// <Data Name="ObjectName">value</Data> (attribute order may vary slightly)
-	needle := `Name="` + name + `"`
-	i := strings.Index(block, needle)
-	if i < 0 {
-		return ""
+	// wevtutil may emit Name="ObjectName" or Name='ObjectName'.
+	for _, q := range []string{`"`, `'`} {
+		needle := "Name=" + q + name + q
+		i := strings.Index(block, needle)
+		if i < 0 {
+			continue
+		}
+		rest := block[i+len(needle):]
+		gt := strings.Index(rest, ">")
+		if gt < 0 {
+			continue
+		}
+		rest = rest[gt+1:]
+		end := strings.Index(rest, "</Data>")
+		if end < 0 {
+			continue
+		}
+		return strings.TrimSpace(rest[:end])
 	}
-	rest := block[i+len(needle):]
-	gt := strings.Index(rest, ">")
-	if gt < 0 {
-		return ""
-	}
-	rest = rest[gt+1:]
-	end := strings.Index(rest, "</Data>")
-	if end < 0 {
-		return ""
-	}
-	return strings.TrimSpace(rest[:end])
+	return ""
 }
 
 func parse4663Text(raw string, targets []Target) []Touch {

@@ -154,9 +154,8 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		if caps != "" {
 			rec.Capabilities = caps
 		}
-		if watches > 0 {
-			rec.WatchCount = watches
-		}
+		// Always apply watches when present, including 0, so a reconfig clears stale counts.
+		rec.WatchCount = watches
 	}
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()

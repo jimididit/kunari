@@ -241,6 +241,10 @@ func (w *etwWatcher) rememberObj(obj, path string) {
 	for len(w.byObj) >= etwMaxObjCache && len(w.objQ) > 0 {
 		old := w.objQ[0]
 		w.objQ = w.objQ[1:]
+		// Skip stale queue entries left after forgetObj.
+		if _, ok := w.byObj[old]; !ok {
+			continue
+		}
 		delete(w.byObj, old)
 	}
 	w.byObj[obj] = path
@@ -253,5 +257,17 @@ func (w *etwWatcher) forgetObj(obj string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if _, ok := w.byObj[obj]; !ok {
+		return
+	}
 	delete(w.byObj, obj)
+	// Compact objQ so forgotten keys cannot grow the queue without bound
+	// or later evict a reused FileObject mapping.
+	dst := w.objQ[:0]
+	for _, k := range w.objQ {
+		if k != obj {
+			dst = append(dst, k)
+		}
+	}
+	w.objQ = dst
 }

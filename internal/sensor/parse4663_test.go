@@ -149,6 +149,19 @@ func TestNormalizeWinPathStripsLongPrefix(t *testing.T) {
 	if got := normalizeWinPath(`\\?\C:\Lab\Decoy.env`); got != `c:\lab\decoy.env` {
 		t.Fatalf("got %q", got)
 	}
+	if got := normalizeWinPath(`\\?\UNC\server\share\decoy.env`); got != `\\server\share\decoy.env` {
+		t.Fatalf("unc got %q", got)
+	}
+}
+
+func TestParse4663XMLSingleQuotedAttrs(t *testing.T) {
+	raw := `<Event><System><EventRecordID>9</EventRecordID></System>` +
+		`<EventData><Data Name='ObjectName'>C:\lab\decoy.env</Data>` +
+		`<Data Name='AccessMask'>0x1</Data></EventData></Event>`
+	got := parse4663(raw, []Target{{Path: `C:\lab\decoy.env`, TokenID: "abc"}})
+	if len(got) != 1 || got[0].Action != "read" || got[0].Extra["event_record_id"] != "9" {
+		t.Fatalf("got %+v", got)
+	}
 }
 
 func TestMapAccessMaskBits(t *testing.T) {

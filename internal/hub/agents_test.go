@@ -175,4 +175,12 @@ func TestNoteHeartbeatStoresCapabilities(t *testing.T) {
 	if snap[0].Tier != "win-sacl-4663" {
 		t.Fatalf("tier %q", snap[0].Tier)
 	}
+	ev2 := event.New("heartbeat", "sentinel", "win-sacl-4663", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-caps", Hostname: "lab", OS: "windows"}
+	ev2.Memo = "heartbeat;every=60s;watches=0;caps=idle"
+	tr.NoteHeartbeat(ev2)
+	snap = tr.Snapshot()
+	if snap[0].WatchCount != 0 {
+		t.Fatalf("expected watches cleared to 0, got %d", snap[0].WatchCount)
+	}
 }
