@@ -140,7 +140,8 @@
     var action = ev.action || "";
     var detector = ev.detector || "";
     var tid = ev.token_id || "";
-    if (tid === "heartbeat" || action === "heartbeat") {
+    // Only token_id=heartbeat is control-plane; action alone can be a real token alert.
+    if (tid === "heartbeat") {
       if (!fltHeartbeats.checked) return false;
     } else if (detector === "beacon" || action === "beacon_fetch" || (tid && tid.indexOf("agent_") !== 0 && detector !== "hub" && detector !== "sentinel")) {
       // beacons often detector=beacon
@@ -286,7 +287,7 @@
     for (var i = 0; i < eventRows.length; i++) {
       var ev = eventRows[i];
       if (!ev || !ev.host || ev.host.id !== agentID) continue;
-      if (ev.token_id === "heartbeat" || ev.action === "heartbeat") continue;
+      if (ev.token_id === "heartbeat") continue;
       local.push(ev);
     }
     if (local.length) renderDrawerEvents(local.slice(0, 40));

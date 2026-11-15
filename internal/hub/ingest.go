@@ -140,7 +140,12 @@ func (h *Hub) recordIngest(ev *event.Event) error {
 		h.hits++
 		h.mu.Unlock()
 		if recovered {
-			h.emitAgentRecoveredLocked(ev)
+			if err := h.emitAgentRecoveredLocked(ev); err != nil {
+				// Re-arm so a later heartbeat retries agent_recovered.
+				if id := agentKey(ev); id != "" {
+					h.agents.MarkRecoverPending(id)
+				}
+			}
 		}
 		return nil
 	}
@@ -247,7 +252,7 @@ func (h *Hub) emitMissingAgents(now time.Time) {
 }
 
 // emitAgentRecoveredLocked requires h.agentMu held by the caller.
-func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) {
+func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) error {
 	ev := event.New("agent_status", "hub", "agent-watch", "agent_recovered")
 	ev.Memo = "sentinel heartbeat resumed"
 	if hb != nil && hb.Host != nil {
@@ -264,15 +269,16 @@ func (h *Hub) emitAgentRecoveredLocked(hb *event.Event) {
 	ev.Confidence.Action = "inferred"
 	if err := h.chain.Append(ev); err != nil {
 		h.log.Error("agent_recovered chain", "err", err)
-		return
+		return err
 	}
 	h.subs.Broadcast(ev)
 	if err := h.queue.Enqueue(ev); err != nil {
 		h.log.Error("agent_recovered enqueue", "err", err)
-		return
+		return err
 	}
 	h.mu.Lock()
 	h.hits++
 	h.alerts++
 	h.mu.Unlock()
+	return nil
 }

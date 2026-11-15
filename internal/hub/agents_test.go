@@ -62,6 +62,22 @@ func TestAgentTrackerRecoverRequiresMissingAlert(t *testing.T) {
 	}
 }
 
+func TestAgentTrackerRecoverPendingRetry(t *testing.T) {
+	tr, err := newAgentTracker(t.TempDir(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev.Host = &event.HostInfo{ID: "agent-p", Hostname: "p", OS: "linux"}
+	tr.NoteHeartbeat(ev)
+	tr.MarkRecoverPending("agent-p")
+	ev2 := event.New("heartbeat", "sentinel", "inotify", "heartbeat")
+	ev2.Host = &event.HostInfo{ID: "agent-p", Hostname: "p", OS: "linux"}
+	if !tr.NoteHeartbeat(ev2) {
+		t.Fatal("expected recovered=true when RecoverPending is set")
+	}
+}
+
 func TestAgentTrackerNeedsMissingAlert(t *testing.T) {
 	tr, err := newAgentTracker(t.TempDir(), time.Minute)
 	if err != nil {

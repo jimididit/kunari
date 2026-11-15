@@ -178,6 +178,9 @@ func (h *Hub) handleListEvents(w http.ResponseWriter, r *http.Request) {
 // true, a sliding window keeps the newest matches across the scan cap.
 func (h *Hub) scanEvents(after uint64, limit int, hostID string, excludeHB, latest bool) ([]event.Event, uint64, error) {
 	const maxScan = 10000
+	if limit < 1 {
+		limit = 1
+	}
 	// For latest windows, start near the tip so a long chain is not sampled from the head.
 	if latest && after == 0 {
 		if last := h.chain.LastSeq(); last > uint64(maxScan) {

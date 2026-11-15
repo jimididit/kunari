@@ -34,9 +34,10 @@ type agentRecord struct {
 	Tier           string    `json:"tier,omitempty"`
 	AgentVersion   string    `json:"agent_version,omitempty"`
 	LastSeen       time.Time `json:"last_seen"`
-	Missing        bool      `json:"missing"`
-	MissingAlerted bool      `json:"missing_alerted"`
-	Retired        bool      `json:"retired,omitempty"`
+	Missing         bool `json:"missing"`
+	MissingAlerted  bool `json:"missing_alerted"`
+	RecoverPending  bool `json:"recover_pending,omitempty"`
+	Retired         bool `json:"retired,omitempty"`
 }
 
 type agentTracker struct {
@@ -113,12 +114,13 @@ func (t *agentTracker) NoteHeartbeat(ev *event.Event) (recovered bool) {
 		rec = &agentRecord{ID: id}
 		t.byID[id] = rec
 	}
-	// Only pair agent_recovered with a prior durable agent_missing alert.
-	wasMissing := rec.Missing && rec.MissingAlerted && !rec.Retired
+	// Pair agent_recovered with a prior missing alert, or retry a failed recover emit.
+	wasMissing := !rec.Retired && ((rec.Missing && rec.MissingAlerted) || rec.RecoverPending)
 	// Hub clock only - sender ObservedAt must not push last-seen into the future.
 	rec.LastSeen = time.Now().UTC()
 	rec.Missing = false
 	rec.MissingAlerted = false
+	rec.RecoverPending = false
 	rec.Retired = false
 	if ev.Host != nil {
 		if ev.Host.Hostname != "" {
@@ -183,6 +185,25 @@ func (t *agentTracker) CheckMissing(now time.Time) []*agentRecord {
 	return out
 }
 
+// MarkRecoverPending arms a retry when agent_recovered failed to emit durably.
+func (t *agentTracker) MarkRecoverPending(id string) {
+	if t == nil || id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec := t.byID[id]
+	if rec == nil || rec.Retired {
+		return
+	}
+	rec.RecoverPending = true
+	if err := t.persistLocked(); err != nil {
+		t.lastErr = err.Error()
+	} else {
+		t.lastErr = ""
+	}
+}
+
 // NeedsMissingAlert reports whether id is still missing and has not been alerted.
 func (t *agentTracker) NeedsMissingAlert(id string) bool {
 	if t == nil || id == "" {
@@ -231,6 +252,7 @@ func (t *agentTracker) Retire(id string) error {
 	rec.Retired = true
 	rec.Missing = false
 	rec.MissingAlerted = true
+	rec.RecoverPending = false
 	if err := t.persistLocked(); err != nil {
 		t.lastErr = err.Error()
 		return err
