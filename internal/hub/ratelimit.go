@@ -9,9 +9,9 @@ import (
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
-// At capacity, idle-full buckets are preferred for eviction, then buckets that
-// still have budget. If every slot is actively throttled (empty), new keys are
-// denied until a bucket refills or goes idle - we never reset a Deny into Allow.
+// Idle buckets are reaped when the map grows past maxKeys; actively throttled
+// buckets are never deleted (that would reset Deny into Allow). Soft memory
+ // growth under a sustained many-IP flood is an accepted residual of opt-in limits.
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
@@ -58,10 +58,7 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	b := l.buckets[key]
 	if b == nil {
 		if len(l.buckets) >= l.maxKeys {
-			if !l.evictOneLocked(now) {
-				// All slots are actively throttled - do not reset their budgets.
-				return false, time.Second
-			}
+			l.reapIdleLocked(now)
 		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
@@ -86,39 +83,21 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	return true, 0
 }
 
-// evictOneLocked prefers a quiet, full bucket (estimate only - does not mutate
-// tokens/last). Next prefers a bucket that still has budget. Never deletes a
-// currently-throttled (empty) bucket - that would reset Deny and enable bypass.
-// Returns false if every slot is actively throttled.
-func (l *ipRateLimiter) evictOneLocked(now time.Time) bool {
-	estTokens := func(b *tokenBucket) float64 {
-		est := b.tokens + now.Sub(b.last).Seconds()*l.ratePerSec
-		if est > l.burst {
-			return l.burst
-		}
-		if est < 0 {
-			return 0
-		}
-		return est
-	}
+// reapIdleLocked deletes quiet, full buckets only (estimate; no token mutation).
+func (l *ipRateLimiter) reapIdleLocked(now time.Time) {
 	for k, b := range l.buckets {
 		if now.Sub(b.last) < l.idleAfter {
 			continue
 		}
-		if estTokens(b) < l.burst {
+		est := b.tokens + now.Sub(b.last).Seconds()*l.ratePerSec
+		if est > l.burst {
+			est = l.burst
+		}
+		if est < l.burst {
 			continue
 		}
 		delete(l.buckets, k)
-		return true
 	}
-	for k, b := range l.buckets {
-		if estTokens(b) < 1 {
-			continue // actively throttled - keep
-		}
-		delete(l.buckets, k)
-		return true
-	}
-	return false
 }
 
 func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
