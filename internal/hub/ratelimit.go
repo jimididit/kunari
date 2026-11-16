@@ -8,8 +8,8 @@ import (
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
-// When maxKeys is reached, new keys are denied (fail closed) instead of evicting
-// active buckets (eviction would reset throttle and enable bypass).
+// At capacity, idle buckets (fully refilled and quiet) are evicted; if none are
+// idle, new keys are denied (fail closed) so active throttle state is not reset.
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
@@ -17,6 +17,7 @@ type ipRateLimiter struct {
 	buckets    map[string]*tokenBucket
 	now        func() time.Time
 	maxKeys    int
+	idleAfter  time.Duration
 }
 
 type tokenBucket struct {
@@ -38,10 +39,10 @@ func newIPRateLimiter(ratePerMin int) *ipRateLimiter {
 		buckets:    make(map[string]*tokenBucket),
 		now:        time.Now,
 		maxKeys:    10000,
+		idleAfter:  2 * time.Minute,
 	}
 }
 
-// allow reports whether key may proceed.
 func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	if l == nil {
 		return true, 0
@@ -55,8 +56,9 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	b := l.buckets[key]
 	if b == nil {
 		if len(l.buckets) >= l.maxKeys {
-			// Fail closed: do not evict (eviction resets throttle / enables bypass).
-			return false, time.Second
+			if !l.evictIdleLocked(now) {
+				return false, time.Second
+			}
 		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
@@ -81,6 +83,45 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	return true, 0
 }
 
+// evictIdleLocked removes one fully-refilled bucket that has been quiet.
+// Returns false if no idle victim exists.
+func (l *ipRateLimiter) evictIdleLocked(now time.Time) bool {
+	var victim string
+	var victimLast time.Time
+	found := false
+	for k, b := range l.buckets {
+		refillUnlocked(b, l.ratePerSec, l.burst, now)
+		if b.tokens < l.burst {
+			continue // still throttled / recently active
+		}
+		if now.Sub(b.last) < l.idleAfter {
+			continue
+		}
+		if !found || b.last.Before(victimLast) {
+			victim = k
+			victimLast = b.last
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	delete(l.buckets, victim)
+	return true
+}
+
+func refillUnlocked(b *tokenBucket, ratePerSec, burst float64, now time.Time) {
+	elapsed := now.Sub(b.last).Seconds()
+	if elapsed <= 0 {
+		return
+	}
+	b.tokens += elapsed * ratePerSec
+	if b.tokens > burst {
+		b.tokens = burst
+	}
+	// Do not advance last here - idle detection uses last activity time.
+}
+
 func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
 	if retry < time.Second {
 		retry = time.Second
@@ -103,7 +144,6 @@ func (h *Hub) limitPublic(lim *ipRateLimiter, next http.HandlerFunc) http.Handle
 	}
 }
 
-// allowIngestRate limits authenticated ingest by client IP (prefix isolates budget).
 func (h *Hub) allowIngestRate(r *http.Request) (bool, time.Duration) {
 	if h.ingestLimit == nil {
 		return true, 0
@@ -111,7 +151,6 @@ func (h *Hub) allowIngestRate(r *http.Request) (bool, time.Duration) {
 	return h.ingestLimit.allow("ingest:" + h.clientIP(r))
 }
 
-// allowJobsRate limits authenticated job pull/result by client IP (separate budget).
 func (h *Hub) allowJobsRate(r *http.Request) (bool, time.Duration) {
 	if h.ingestLimit == nil {
 		return true, 0

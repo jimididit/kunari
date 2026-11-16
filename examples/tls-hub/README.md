@@ -46,10 +46,11 @@ ssh -L 8080:127.0.0.1:8080 user@hub-host
 ```bash
 mkdir -p data
 kunari hub --listen 127.0.0.1:8080 --data ./data \
-  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For \
+  --beacon-rate-limit 60 --ingest-rate-limit 120
 ```
 
-Secrets land under `./data` (`ingest.secret`, `api.token`). Never embed them in forged decoys.
+Rate limits are opt-in (defaults are off). Use them on public collectors together with `--trusted-proxy` so per-IP buckets see the real client. Secrets land under `./data` (`ingest.secret`, `api.token`). Never embed them in forged decoys.
 
 ## Client IP (`X-Forwarded-For`)
 

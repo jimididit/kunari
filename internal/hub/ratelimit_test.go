@@ -34,26 +34,34 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	}
 }
 
-func TestIPRateLimiterFailClosedAtMaxKeys(t *testing.T) {
+func TestIPRateLimiterEvictsIdleOnly(t *testing.T) {
 	lim := newIPRateLimiter(60)
 	lim.maxKeys = 2
+	lim.idleAfter = time.Minute
 	base := time.Unix(1_700_000_000, 0).UTC()
-	lim.now = func() time.Time { return base }
-	if ok, _ := lim.allow("a"); !ok {
-		t.Fatal("a")
+	now := base
+	lim.now = func() time.Time { return now }
+
+	if ok, _ := lim.allow("idle"); !ok {
+		t.Fatal("idle")
 	}
-	if ok, _ := lim.allow("b"); !ok {
-		t.Fatal("b")
+	if ok, _ := lim.allow("hot"); !ok {
+		t.Fatal("hot")
 	}
-	if ok, _ := lim.allow("c"); ok {
-		t.Fatal("new key at capacity must deny (no eviction bypass)")
+	// Exhaust hot so it is not idle/full.
+	for i := 0; i < 60; i++ {
+		lim.allow("hot")
 	}
-	// Existing key still works.
-	if ok, _ := lim.allow("a"); !ok {
-		t.Fatal("existing key must still allow")
+	// Advance past idleAfter; idle is full+quiet, hot is depleted.
+	now = base.Add(3 * time.Minute)
+	if ok, _ := lim.allow("new"); !ok {
+		t.Fatal("should evict idle and admit new")
 	}
-	if len(lim.buckets) != 2 {
-		t.Fatalf("buckets=%d", len(lim.buckets))
+	if _, ok := lim.buckets["idle"]; ok {
+		t.Fatal("idle should have been evicted")
+	}
+	if _, ok := lim.buckets["hot"]; !ok {
+		t.Fatal("hot must not be evicted while active")
 	}
 }
 

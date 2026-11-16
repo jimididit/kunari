@@ -79,8 +79,8 @@ func newHubCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil, "CIDR/IP of reverse proxies allowed to set client-IP header (repeatable); empty = trust RemoteAddr only")
 	cmd.Flags().StringVar(&clientIPHeader, "client-ip-header", "X-Forwarded-For", "header used when peer matches --trusted-proxy")
 	cmd.Flags().DurationVar(&agentStaleAfter, "agent-stale-after", 3*time.Minute, "alert when a heartbeating sentinel is silent this long (0 disables)")
-	cmd.Flags().IntVar(&beaconRatePerMin, "beacon-rate-limit", 60, "max successful /b/{token} responses per client IP per minute (0 disables); hits are always recorded")
-	cmd.Flags().IntVar(&ingestRatePerMin, "ingest-rate-limit", 120, "max authenticated ingest and job pull|result per client IP per minute (0 disables); raise for large NAT fleets")
+	cmd.Flags().IntVar(&beaconRatePerMin, "beacon-rate-limit", 0, "max /b/{token} per client IP per minute (0=off, recommended 60 on public collectors; when set, over-limit hits are not recorded)")
+	cmd.Flags().IntVar(&ingestRatePerMin, "ingest-rate-limit", 0, "max authenticated ingest and job pull|result per client IP per minute (0=off, recommended 120 on public collectors; raise further for large NAT fleets)")
 	cmd.Flags().StringVar(&collectLvl, "collect", "standard", "minimal|standard|forensic")
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if keyPath == "" {
