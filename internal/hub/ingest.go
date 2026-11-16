@@ -89,7 +89,6 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
 	var ev event.Event
 	if err := json.Unmarshal(body, &ev); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -101,6 +100,11 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if ev.Detector != "sentinel" {
 		http.Error(w, "detector must be sentinel", http.StatusBadRequest)
+		return
+	}
+	// After HMAC: limit by client IP (not client-supplied agent id).
+	if ok, retry := h.allowIngestRate(r); !ok {
+		writeTooManyRequests(w, retry)
 		return
 	}
 	headerID := r.Header.Get(sink.HeaderEventID)

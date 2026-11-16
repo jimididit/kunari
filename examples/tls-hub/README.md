@@ -46,10 +46,11 @@ ssh -L 8080:127.0.0.1:8080 user@hub-host
 ```bash
 mkdir -p data
 kunari hub --listen 127.0.0.1:8080 --data ./data \
-  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
+  --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For \
+  --beacon-rate-limit 60 --ingest-rate-limit 120
 ```
 
-Secrets land under `./data` (`ingest.secret`, `api.token`). Never embed them in forged decoys.
+Rate limits are opt-in (defaults are off). Use them on public collectors together with `--trusted-proxy` so per-IP buckets see the real client. Secrets land under `./data` (`ingest.secret`, `api.token`). Never embed them in forged decoys.
 
 ## Client IP (`X-Forwarded-For`)
 
@@ -146,6 +147,20 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.example.com/ui/
 curl -sS -H "Authorization: Bearer $(tr -d '\n' < ./data/api.token)" \
   'http://127.0.0.1:8080/api/v1/events?after_seq=0&limit=20'
 ```
+
+## Optional custom domain
+
+A real hostname (for example `hub.example.com`) is optional. sslip.io or any reachable HTTPS name works for lab and many deploys. A domain does **not** bypass filters that block the hub IP.
+
+If you cut over later, dual-run first:
+
+1. Point DNS `A`/`AAAA` at the hub host.
+2. List both the old name and the new name on the same Caddy/nginx vhost reverse-proxying to `127.0.0.1:8080`.
+3. Confirm `curl -fsS https://<new>/healthz` and the old URL both return `"ok": true`.
+4. Forge/pack new decoys against the new collector URL; leave old decoys on the old URL until replaced.
+5. Existing agents: rebuild, or queue `rotate_hub_url_hint` after the new URL is healthy.
+
+Full operator checklist (disclosure, drain, engagement notes) lives in private `docs/DOMAIN_CUTOVER.md` when that tree is present.
 
 ## What this example is not
 

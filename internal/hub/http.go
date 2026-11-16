@@ -26,7 +26,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /b/{token}", h.handleBeacon)
 	mux.HandleFunc("HEAD /b/{token}", h.handleBeacon)
 	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
-	// Agent job transport: ingest HMAC (same trust domain as /api/v1/ingest), not operator bearer.
+	// Agent job transport: ingest HMAC (rate limit is per client IP inside handlers).
 	mux.HandleFunc("POST /api/v1/jobs/pull", h.requireIngestHMACAuth(h.handleJobPull))
 	mux.HandleFunc("POST /api/v1/jobs/result", h.requireIngestHMACAuth(h.handleJobResult))
 	mux.HandleFunc("GET /api/v1/events", h.requireAPIAuth(false, h.handleListEvents))
@@ -61,10 +61,19 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Always record the tripwire (detection). When limits are enabled, over-limit
+	// clients still get an event then 429 - storage flood residual is accepted
+	// for opted-in public collectors (existing alert throttle still applies).
 	if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
 		h.log.Error("record beacon", "err", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
+	}
+	if h.beaconLimit != nil {
+		if ok, retry := h.beaconLimit.allow(h.clientIP(r)); !ok {
+			writeTooManyRequests(w, retry)
+			return
+		}
 	}
 	// 1x1 transparent GIF
 	w.Header().Set("Content-Type", "image/gif")

@@ -104,6 +104,10 @@ func (h *Hub) handleJobPull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown or stale agent", http.StatusForbidden)
 		return
 	}
+	if ok, retry := h.allowJobsRate(r); !ok {
+		writeTooManyRequests(w, retry)
+		return
+	}
 	jobs, err := h.jobs.Pull(req.AgentID, req.Limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -136,6 +140,10 @@ func (h *Hub) handleJobResult(w http.ResponseWriter, r *http.Request) {
 	}
 	if !h.agentMayPullJobs(req.AgentID) {
 		http.Error(w, "unknown or stale agent", http.StatusForbidden)
+		return
+	}
+	if ok, retry := h.allowJobsRate(r); !ok {
+		writeTooManyRequests(w, retry)
 		return
 	}
 	j, err := h.jobs.Complete(req.AgentID, req.JobID, req.Result, req.Error)
