@@ -57,7 +57,10 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	b := l.buckets[key]
 	if b == nil {
 		if len(l.buckets) >= l.maxKeys {
-			l.evictOneLocked(now)
+			if !l.evictOneLocked(now) {
+				// All slots are actively throttled - do not reset their budgets.
+				return false, time.Second
+			}
 		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
@@ -83,23 +86,38 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 }
 
 // evictOneLocked prefers a quiet, full bucket (estimate only - does not mutate
-// tokens/last). Falls back to deleting one arbitrary key.
-func (l *ipRateLimiter) evictOneLocked(now time.Time) {
+// tokens/last). Next prefers a bucket that still has budget. Never deletes a
+// currently-throttled (empty) bucket - that would reset Deny and enable bypass.
+// Returns false if every slot is actively throttled.
+func (l *ipRateLimiter) evictOneLocked(now time.Time) bool {
+	estTokens := func(b *tokenBucket) float64 {
+		est := b.tokens + now.Sub(b.last).Seconds()*l.ratePerSec
+		if est > l.burst {
+			return l.burst
+		}
+		if est < 0 {
+			return 0
+		}
+		return est
+	}
 	for k, b := range l.buckets {
 		if now.Sub(b.last) < l.idleAfter {
 			continue
 		}
-		est := b.tokens + now.Sub(b.last).Seconds()*l.ratePerSec
-		if est < l.burst {
+		if estTokens(b) < l.burst {
 			continue
 		}
 		delete(l.buckets, k)
-		return
+		return true
 	}
-	for k := range l.buckets {
+	for k, b := range l.buckets {
+		if estTokens(b) < 1 {
+			continue // actively throttled - keep
+		}
 		delete(l.buckets, k)
-		return
+		return true
 	}
+	return false
 }
 
 func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
