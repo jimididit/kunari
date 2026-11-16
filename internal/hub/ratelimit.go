@@ -9,17 +9,18 @@ import (
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
-// Idle buckets are reaped when the map grows past maxKeys; actively throttled
-// buckets are never deleted (that would reset Deny into Allow). Soft memory
- // growth under a sustained many-IP flood is an accepted residual of opt-in limits.
+// Buckets live until reapIdle runs (called opportunistically). There is no hard
+// key cap and no eviction of active budgets - a many-IP flood can grow memory;
+// that residual is accepted for this opt-in public-collector feature (default off).
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
 	burst      float64
 	buckets    map[string]*tokenBucket
 	now        func() time.Time
-	maxKeys    int
 	idleAfter  time.Duration
+	lastReap   time.Time
+	reapEvery  time.Duration
 }
 
 type tokenBucket struct {
@@ -40,8 +41,8 @@ func newIPRateLimiter(ratePerMin int) *ipRateLimiter {
 		burst:      burst,
 		buckets:    make(map[string]*tokenBucket),
 		now:        time.Now,
-		maxKeys:    10000,
 		idleAfter:  2 * time.Minute,
+		reapEvery:  time.Minute,
 	}
 }
 
@@ -55,11 +56,12 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	if now.Sub(l.lastReap) >= l.reapEvery {
+		l.reapIdleLocked(now)
+		l.lastReap = now
+	}
 	b := l.buckets[key]
 	if b == nil {
-		if len(l.buckets) >= l.maxKeys {
-			l.reapIdleLocked(now)
-		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	}
@@ -83,7 +85,6 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	return true, 0
 }
 
-// reapIdleLocked deletes quiet, full buckets only (estimate; no token mutation).
 func (l *ipRateLimiter) reapIdleLocked(now time.Time) {
 	for k, b := range l.buckets {
 		if now.Sub(b.last) < l.idleAfter {

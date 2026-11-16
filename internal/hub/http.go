@@ -26,7 +26,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /b/{token}", h.handleBeacon)
 	mux.HandleFunc("HEAD /b/{token}", h.handleBeacon)
 	mux.HandleFunc("POST /api/v1/ingest", h.handleIngest)
-	// Agent job transport: ingest HMAC (rate limit is per agent_id inside handlers).
+	// Agent job transport: ingest HMAC (rate limit is per client IP inside handlers).
 	mux.HandleFunc("POST /api/v1/jobs/pull", h.requireIngestHMACAuth(h.handleJobPull))
 	mux.HandleFunc("POST /api/v1/jobs/result", h.requireIngestHMACAuth(h.handleJobResult))
 	mux.HandleFunc("GET /api/v1/events", h.requireAPIAuth(false, h.handleListEvents))

@@ -11,6 +11,7 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	lim := newIPRateLimiter(2)
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
+	lim.lastReap = base
 
 	if ok, _ := lim.allow("1.2.3.4"); !ok {
 		t.Fatal("first allow")
@@ -34,27 +35,24 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	}
 }
 
-func TestIPRateLimiterReapsIdleOnly(t *testing.T) {
-	lim := newIPRateLimiter(1)
-	lim.maxKeys = 1
+func TestIPRateLimiterReapsIdle(t *testing.T) {
+	lim := newIPRateLimiter(60)
 	lim.idleAfter = time.Minute
+	lim.reapEvery = time.Minute
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now := base
 	lim.now = func() time.Time { return now }
+	lim.lastReap = base
 
 	if ok, _ := lim.allow("idle"); !ok {
 		t.Fatal("idle")
 	}
-	// Exhaust idle so it is throttled (must not be reaped while empty+recent).
-	if ok, _ := lim.allow("idle"); ok {
-		t.Fatal("should throttle")
-	}
 	now = base.Add(3 * time.Minute)
-	// After idleAfter with full estimate, reap allows a new key without resetting
-	// a currently-empty recent throttle mid-window - idle has been quiet long enough
-	// that estimate is full again, so reap deletes it.
-	if ok, _ := lim.allow("new"); !ok {
-		t.Fatal("new after idle reap")
+	if ok, _ := lim.allow("keep"); !ok {
+		t.Fatal("keep triggers reap")
+	}
+	if lim.buckets["idle"] != nil {
+		t.Fatal("idle should be reaped")
 	}
 }
 
@@ -66,7 +64,9 @@ func TestIPRateLimiterDisabled(t *testing.T) {
 
 func TestLimitPublicReturns429(t *testing.T) {
 	h := &Hub{ingestLimit: newIPRateLimiter(1)}
-	h.ingestLimit.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	base := time.Unix(1_700_000_000, 0).UTC()
+	h.ingestLimit.now = func() time.Time { return base }
+	h.ingestLimit.lastReap = base
 	var hits int
 	handler := h.limitPublic(h.ingestLimit, func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -90,6 +90,7 @@ func TestIngestAndJobsSeparateBudgets(t *testing.T) {
 	h := &Hub{ingestLimit: newIPRateLimiter(1)}
 	base := time.Unix(1_700_000_000, 0).UTC()
 	h.ingestLimit.now = func() time.Time { return base }
+	h.ingestLimit.lastReap = base
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "10.0.0.1:9"
 	if ok, _ := h.allowIngestRate(req); !ok {
