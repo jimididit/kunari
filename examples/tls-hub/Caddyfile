@@ -4,7 +4,7 @@
 # Hub must listen on 127.0.0.1:8080 with:
 #   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 #
-# Public paths: /b/*, /healthz, POST /api/v1/ingest
+# Public paths: /b/*, /healthz, POST /api/v1/ingest, POST /api/v1/jobs/pull|result
 # Operator /ui/ and pull/SSE APIs stay on loopback (SSH tunnel) unless you
 # uncomment the @ops block below.
 
@@ -16,6 +16,7 @@ beacon.example.com {
 	@public {
 		path /b/* /healthz
 		path /api/v1/ingest
+		path /api/v1/jobs/pull /api/v1/jobs/result
 	}
 	handle @public {
 		reverse_proxy 127.0.0.1:8080 {

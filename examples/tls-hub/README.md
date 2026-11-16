@@ -32,6 +32,8 @@ The example configs **do not** publish `/ui/` or the Bearer-protected operator A
 | `/b/{token}` | yes | HTTPS beacons |
 | `/healthz` | yes | Liveness |
 | `POST /api/v1/ingest` | yes | Sentinel HMAC push (still requires ingest secret) |
+| `POST /api/v1/jobs/pull` | yes | Agent job pull (ingest HMAC + recent heartbeat) |
+| `POST /api/v1/jobs/result` | yes | Agent job result (ingest HMAC) |
 | `/ui/`, other `/api/v1/*` | no (default) | Use an SSH tunnel or uncomment the optional `@ops` allowlist in the Caddyfile |
 
 Operator via tunnel:
