@@ -9,8 +9,9 @@ import (
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
-// At capacity, idle buckets are preferred for eviction; if none are idle, one
-// arbitrary key is dropped so new clients are not permanently locked out.
+// At capacity, idle-full buckets are preferred for eviction, then buckets that
+// still have budget. If every slot is actively throttled (empty), new keys are
+// denied until a bucket refills or goes idle - we never reset a Deny into Allow.
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
