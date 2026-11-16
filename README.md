@@ -174,7 +174,7 @@ Operational hardening and reporting guidance: [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.5.1** is the current release: Windows SACL 4663 action labels + path-filtered Security log query, fanotify mask priority, beacon-max DNS hub recipe, `folder`/`stub-exe` forge types (folder materializes a dir; watch `secrets.env`), plus v0.5.0 OPSEC P0 / missing-agent / dual-layer pack guidance.
+**v0.6.0** is the current release: hub ops console v2, engagement labels + registry sync, visible-path packaging, honest detection capability matrix, bounded pull control plane (Ed25519-signed jobs), and opt-in public path rate limits (`--beacon-rate-limit` / `--ingest-rate-limit`).
 
 ## Contributing
 
