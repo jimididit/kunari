@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,9 +9,6 @@ import (
 
 func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	lim := newIPRateLimiter(2)
-	if lim == nil {
-		t.Fatal("expected limiter")
-	}
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
 
@@ -38,18 +34,26 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	}
 }
 
-func TestIPRateLimiterOverflow(t *testing.T) {
-	lim := newIPRateLimiter(1)
+func TestIPRateLimiterFailClosedAtMaxKeys(t *testing.T) {
+	lim := newIPRateLimiter(60)
+	lim.maxKeys = 2
 	base := time.Unix(1_700_000_000, 0).UTC()
 	lim.now = func() time.Time { return base }
-	if ok, _ := lim.allow("1.1.1.1"); !ok {
-		t.Fatal("primary")
+	if ok, _ := lim.allow("a"); !ok {
+		t.Fatal("a")
 	}
-	if ok, _ := lim.allow("1.1.1.1"); ok {
-		t.Fatal("primary exhausted")
+	if ok, _ := lim.allow("b"); !ok {
+		t.Fatal("b")
 	}
-	if !lim.allowOverflow("1.1.1.1") {
-		t.Fatal("overflow should still allow recording")
+	if ok, _ := lim.allow("c"); ok {
+		t.Fatal("new key at capacity must deny (no eviction bypass)")
+	}
+	// Existing key still works.
+	if ok, _ := lim.allow("a"); !ok {
+		t.Fatal("existing key must still allow")
+	}
+	if len(lim.buckets) != 2 {
+		t.Fatalf("buckets=%d", len(lim.buckets))
 	}
 }
 
@@ -67,7 +71,7 @@ func TestLimitPublicReturns429(t *testing.T) {
 		hits++
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/pull", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -81,36 +85,19 @@ func TestLimitPublicReturns429(t *testing.T) {
 	}
 }
 
-func TestEvictOneIsBounded(t *testing.T) {
-	lim := newIPRateLimiter(60)
-	lim.maxKeys = 3
-	base := time.Unix(1_700_000_000, 0).UTC()
-	lim.now = func() time.Time { return base }
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("k%d", i)
-		if ok, _ := lim.allow(key); !ok {
-			t.Fatalf("allow %s", key)
-		}
-	}
-	if len(lim.buckets) > lim.maxKeys {
-		t.Fatalf("buckets grew past max: %d", len(lim.buckets))
-	}
-}
-
-func TestAllowIngestRateKeyUsesAgent(t *testing.T) {
+func TestIngestAndJobsSeparateBudgets(t *testing.T) {
 	h := &Hub{ingestLimit: newIPRateLimiter(1)}
 	base := time.Unix(1_700_000_000, 0).UTC()
 	h.ingestLimit.now = func() time.Time { return base }
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "10.0.0.1:9"
-	if ok, _ := h.allowIngestRateKey(req, "agent-a"); !ok {
-		t.Fatal("agent-a first")
+	if ok, _ := h.allowIngestRate(req); !ok {
+		t.Fatal("ingest first")
 	}
-	if ok, _ := h.allowIngestRateKey(req, "agent-a"); ok {
-		t.Fatal("agent-a second must deny")
+	if ok, _ := h.allowIngestRate(req); ok {
+		t.Fatal("ingest second must deny")
 	}
-	// Different agent behind same IP still allowed.
-	if ok, _ := h.allowIngestRateKey(req, "agent-b"); !ok {
-		t.Fatal("agent-b must not share agent-a bucket")
+	if ok, _ := h.allowJobsRate(req); !ok {
+		t.Fatal("jobs budget must be separate")
 	}
 }

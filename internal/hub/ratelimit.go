@@ -3,24 +3,20 @@ package hub
 import (
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
+// When maxKeys is reached, new keys are denied (fail closed) instead of evicting
+// active buckets (eviction would reset throttle and enable bypass).
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
 	burst      float64
 	buckets    map[string]*tokenBucket
-	// overflow: rarer secondary budget so over-limit beacon hits can still
-	// record a few detections without unbounded storage writes.
-	overflowRatePerSec float64
-	overflowBurst      float64
-	overflow           map[string]*tokenBucket
-	now                func() time.Time
-	maxKeys            int
+	now        func() time.Time
+	maxKeys    int
 }
 
 type tokenBucket struct {
@@ -36,99 +32,53 @@ func newIPRateLimiter(ratePerMin int) *ipRateLimiter {
 	if burst < 1 {
 		burst = 1
 	}
-	overflowPerMin := ratePerMin / 12
-	if overflowPerMin < 5 {
-		overflowPerMin = 5
-	}
 	return &ipRateLimiter{
-		ratePerSec:         float64(ratePerMin) / 60.0,
-		burst:              burst,
-		buckets:            make(map[string]*tokenBucket),
-		overflowRatePerSec: float64(overflowPerMin) / 60.0,
-		overflowBurst:      float64(overflowPerMin),
-		overflow:           make(map[string]*tokenBucket),
-		now:                time.Now,
-		maxKeys:            10000,
+		ratePerSec: float64(ratePerMin) / 60.0,
+		burst:      burst,
+		buckets:    make(map[string]*tokenBucket),
+		now:        time.Now,
+		maxKeys:    10000,
 	}
 }
 
-// allow reports whether key may proceed under the primary budget.
+// allow reports whether key may proceed.
 func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	if l == nil {
 		return true, 0
 	}
-	return l.take(key, false)
-}
-
-// allowOverflow spends the secondary budget (beacon over-limit recording).
-func (l *ipRateLimiter) allowOverflow(key string) bool {
-	if l == nil {
-		return true
-	}
-	ok, _ := l.take(key, true)
-	return ok
-}
-
-func (l *ipRateLimiter) take(key string, overflow bool) (ok bool, retryAfter time.Duration) {
 	if key == "" {
 		key = "unknown"
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	rate := l.ratePerSec
-	burst := l.burst
-	store := l.buckets
-	if overflow {
-		rate = l.overflowRatePerSec
-		burst = l.overflowBurst
-		store = l.overflow
-	}
-	b := store[key]
+	b := l.buckets[key]
 	if b == nil {
-		if len(store) >= l.maxKeys {
-			evictOne(store)
+		if len(l.buckets) >= l.maxKeys {
+			// Fail closed: do not evict (eviction resets throttle / enables bypass).
+			return false, time.Second
 		}
-		b = &tokenBucket{tokens: burst, last: now}
-		store[key] = b
+		b = &tokenBucket{tokens: l.burst, last: now}
+		l.buckets[key] = b
 	}
-	refill(b, rate, burst, now)
+	elapsed := now.Sub(b.last).Seconds()
+	if elapsed > 0 {
+		b.tokens += elapsed * l.ratePerSec
+		if b.tokens > l.burst {
+			b.tokens = l.burst
+		}
+		b.last = now
+	}
 	if b.tokens < 1 {
-		return false, retryFor(1-b.tokens, rate)
+		need := 1 - b.tokens
+		sec := need / l.ratePerSec
+		if sec < 1 {
+			sec = 1
+		}
+		return false, time.Duration(sec * float64(time.Second))
 	}
 	b.tokens--
 	return true, 0
-}
-
-func refill(b *tokenBucket, ratePerSec, burst float64, now time.Time) {
-	elapsed := now.Sub(b.last).Seconds()
-	if elapsed > 0 {
-		b.tokens += elapsed * ratePerSec
-		if b.tokens > burst {
-			b.tokens = burst
-		}
-		b.last = now
-	} else if b.last.IsZero() {
-		b.last = now
-	}
-}
-
-func retryFor(need, ratePerSec float64) time.Duration {
-	if ratePerSec <= 0 {
-		return time.Second
-	}
-	sec := need / ratePerSec
-	if sec < 1 {
-		sec = 1
-	}
-	return time.Duration(sec * float64(time.Second))
-}
-
-func evictOne(store map[string]*tokenBucket) {
-	for k := range store {
-		delete(store, k)
-		return
-	}
 }
 
 func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
@@ -139,7 +89,6 @@ func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
 	http.Error(w, "too many requests", http.StatusTooManyRequests)
 }
 
-// limitPublic rate-limits before the handler by client IP.
 func (h *Hub) limitPublic(lim *ipRateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	if lim == nil {
 		return next
@@ -154,15 +103,28 @@ func (h *Hub) limitPublic(lim *ipRateLimiter, next http.HandlerFunc) http.Handle
 	}
 }
 
-// allowIngestRateKey limits authenticated ingest/jobs by agent id (falls back to IP).
-// Avoids one NAT IP throttling every agent behind it.
-func (h *Hub) allowIngestRateKey(r *http.Request, agentID string) (bool, time.Duration) {
+// allowIngestRate limits authenticated ingest by client IP (prefix isolates budget).
+func (h *Hub) allowIngestRate(r *http.Request) (bool, time.Duration) {
 	if h.ingestLimit == nil {
 		return true, 0
 	}
-	key := strings.TrimSpace(agentID)
-	if key == "" {
-		key = h.clientIP(r)
+	return h.ingestLimit.allow("ingest:" + h.clientIP(r))
+}
+
+// allowJobsRate limits authenticated job pull/result by client IP (separate budget).
+func (h *Hub) allowJobsRate(r *http.Request) (bool, time.Duration) {
+	if h.ingestLimit == nil {
+		return true, 0
 	}
-	return h.ingestLimit.allow(key)
+	return h.ingestLimit.allow("jobs:" + h.clientIP(r))
+}
+
+func (h *Hub) rateLimitTrustedProxyHint() {
+	if h == nil || h.log == nil {
+		return
+	}
+	if (h.beaconLimit == nil && h.ingestLimit == nil) || len(h.trustedProxies) > 0 {
+		return
+	}
+	h.log.Info("hub rate limits active without --trusted-proxy; all clients behind a TLS terminator share one IP bucket until trusted-proxy is set")
 }

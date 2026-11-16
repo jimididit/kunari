@@ -155,7 +155,7 @@ func New(cfg Config) (*Hub, error) {
 	if ingestLim != nil {
 		cfg.Logger.Info("hub ingest rate limit", "per_min", cfg.IngestRatePerMin)
 	}
-	return &Hub{
+	h := &Hub{
 		cfg:            cfg,
 		log:            cfg.Logger,
 		keys:           keys,
@@ -172,7 +172,9 @@ func New(cfg Config) (*Hub, error) {
 		trustedProxies: trusted,
 		beaconLimit:    beaconLim,
 		ingestLimit:    ingestLim,
-	}, nil
+	}
+	h.rateLimitTrustedProxyHint()
+	return h, nil
 }
 
 func (h *Hub) Close() error {

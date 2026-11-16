@@ -61,25 +61,17 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	ip := h.clientIP(r)
-	allowed := true
-	var retry time.Duration
-	if h.beaconLimit != nil {
-		allowed, retry = h.beaconLimit.allow(ip)
+	// Always record the tripwire hit. Rate limit only the success response.
+	if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
+		h.log.Error("record beacon", "err", err)
+		http.Error(w, "error", http.StatusInternalServerError)
+		return
 	}
-	// Under limit: always record. Over limit: record only if overflow budget
-	// remains (keeps some detections without unbounded storage writes).
-	shouldRecord := allowed || h.beaconLimit == nil || h.beaconLimit.allowOverflow(ip)
-	if shouldRecord {
-		if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
-			h.log.Error("record beacon", "err", err)
-			http.Error(w, "error", http.StatusInternalServerError)
+	if h.beaconLimit != nil {
+		if ok, retry := h.beaconLimit.allow(h.clientIP(r)); !ok {
+			writeTooManyRequests(w, retry)
 			return
 		}
-	}
-	if !allowed {
-		writeTooManyRequests(w, retry)
-		return
 	}
 	// 1x1 transparent GIF
 	w.Header().Set("Content-Type", "image/gif")

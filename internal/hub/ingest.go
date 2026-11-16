@@ -102,8 +102,8 @@ func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "detector must be sentinel", http.StatusBadRequest)
 		return
 	}
-	// After HMAC + parse: limit by agent id so one NAT IP does not throttle a fleet.
-	if ok, retry := h.allowIngestRateKey(r, agentKey(&ev)); !ok {
+	// After HMAC: limit by client IP (not client-supplied agent id).
+	if ok, retry := h.allowIngestRate(r); !ok {
 		writeTooManyRequests(w, retry)
 		return
 	}
