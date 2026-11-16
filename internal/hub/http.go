@@ -61,18 +61,19 @@ func (h *Hub) handleBeacon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// When rate limits are enabled (opt-in), gate before record so floods cannot
-	// fill storage. Default is limits off - every hit is recorded.
+	// Always record the tripwire (detection). When limits are enabled, over-limit
+	// clients still get an event then 429 - storage flood residual is accepted
+	// for opted-in public collectors (existing alert throttle still applies).
+	if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
+		h.log.Error("record beacon", "err", err)
+		http.Error(w, "error", http.StatusInternalServerError)
+		return
+	}
 	if h.beaconLimit != nil {
 		if ok, retry := h.beaconLimit.allow(h.clientIP(r)); !ok {
 			writeTooManyRequests(w, retry)
 			return
 		}
-	}
-	if err := h.recordBeacon(token, "beacon-https", netInfo); err != nil {
-		h.log.Error("record beacon", "err", err)
-		http.Error(w, "error", http.StatusInternalServerError)
-		return
 	}
 	// 1x1 transparent GIF
 	w.Header().Set("Content-Type", "image/gif")

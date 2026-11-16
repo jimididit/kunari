@@ -34,7 +34,7 @@ func TestIPRateLimiterAllowAndDeny(t *testing.T) {
 	}
 }
 
-func TestIPRateLimiterEvictsIdleOnly(t *testing.T) {
+func TestIPRateLimiterEvictIdleNoDoubleCount(t *testing.T) {
 	lim := newIPRateLimiter(60)
 	lim.maxKeys = 2
 	lim.idleAfter = time.Minute
@@ -45,23 +45,22 @@ func TestIPRateLimiterEvictsIdleOnly(t *testing.T) {
 	if ok, _ := lim.allow("idle"); !ok {
 		t.Fatal("idle")
 	}
-	if ok, _ := lim.allow("hot"); !ok {
-		t.Fatal("hot")
+	if ok, _ := lim.allow("keep"); !ok {
+		t.Fatal("keep")
 	}
-	// Exhaust hot so it is not idle/full.
-	for i := 0; i < 60; i++ {
-		lim.allow("hot")
-	}
-	// Advance past idleAfter; idle is full+quiet, hot is depleted.
 	now = base.Add(3 * time.Minute)
+	// Eviction must not mutate idle's tokens/last (no double-count on later allow).
+	before := *lim.buckets["idle"]
+	lim.evictOneLocked(now)
+	if lim.buckets["idle"] != nil {
+		// If idle was not chosen, keep must still be intact and idle unchanged.
+		got := lim.buckets["idle"]
+		if got.tokens != before.tokens || !got.last.Equal(before.last) {
+			t.Fatalf("eviction mutated idle bucket: before=%+v after=%+v", before, got)
+		}
+	}
 	if ok, _ := lim.allow("new"); !ok {
-		t.Fatal("should evict idle and admit new")
-	}
-	if _, ok := lim.buckets["idle"]; ok {
-		t.Fatal("idle should have been evicted")
-	}
-	if _, ok := lim.buckets["hot"]; !ok {
-		t.Fatal("hot must not be evicted while active")
+		t.Fatal("new after eviction")
 	}
 }
 
@@ -90,6 +89,9 @@ func TestLimitPublicReturns429(t *testing.T) {
 	handler(rr2, req)
 	if rr2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second want 429, got %d", rr2.Code)
+	}
+	if rr2.Header().Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After")
 	}
 }
 

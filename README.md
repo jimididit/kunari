@@ -134,7 +134,7 @@ kunari hub --listen 127.0.0.1:8080 --data ./data \
   --trusted-proxy 127.0.0.1/32 --client-ip-header X-Forwarded-For
 ```
 
-Public path rate limits are **off by default**. On internet-facing collectors set e.g. `--beacon-rate-limit 60 --ingest-rate-limit 120` (per client IP; ingest/jobs after HMAC). Also set `--trusted-proxy` with your TLS terminator so buckets key on the real client IP. Raise ingest further for large NAT fleets. Operator Bearer routes are not limited here (keep them off the public vhost).
+Public path rate limits are **off by default**. On internet-facing collectors set e.g. `--beacon-rate-limit 60 --ingest-rate-limit 120` (per client IP; ingest/jobs after HMAC). Beacon hits are always recorded; the beacon limit only affects the success response. Also set `--trusted-proxy` with your TLS terminator so buckets key on the real client IP. Raise ingest further for large NAT fleets. Operator Bearer routes are not limited here (keep them off the public vhost).
 
 Copy-paste Caddy and nginx configs: [examples/tls-hub](examples/tls-hub/README.md).
 

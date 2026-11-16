@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -8,8 +9,8 @@ import (
 )
 
 // ipRateLimiter is a per-key token bucket. ratePerMin <= 0 disables limiting.
-// At capacity, idle buckets (fully refilled and quiet) are evicted; if none are
-// idle, new keys are denied (fail closed) so active throttle state is not reset.
+// At capacity, idle buckets are preferred for eviction; if none are idle, one
+// arbitrary key is dropped so new clients are not permanently locked out.
 type ipRateLimiter struct {
 	mu         sync.Mutex
 	ratePerSec float64
@@ -56,9 +57,7 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 	b := l.buckets[key]
 	if b == nil {
 		if len(l.buckets) >= l.maxKeys {
-			if !l.evictIdleLocked(now) {
-				return false, time.Second
-			}
+			l.evictOneLocked(now)
 		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
@@ -77,56 +76,38 @@ func (l *ipRateLimiter) allow(key string) (ok bool, retryAfter time.Duration) {
 		if sec < 1 {
 			sec = 1
 		}
-		return false, time.Duration(sec * float64(time.Second))
+		return false, time.Duration(math.Ceil(sec) * float64(time.Second))
 	}
 	b.tokens--
 	return true, 0
 }
 
-// evictIdleLocked removes one fully-refilled bucket that has been quiet.
-// Returns false if no idle victim exists.
-func (l *ipRateLimiter) evictIdleLocked(now time.Time) bool {
-	var victim string
-	var victimLast time.Time
-	found := false
+// evictOneLocked prefers a quiet, full bucket (estimate only - does not mutate
+// tokens/last). Falls back to deleting one arbitrary key.
+func (l *ipRateLimiter) evictOneLocked(now time.Time) {
 	for k, b := range l.buckets {
-		refillUnlocked(b, l.ratePerSec, l.burst, now)
-		if b.tokens < l.burst {
-			continue // still throttled / recently active
-		}
 		if now.Sub(b.last) < l.idleAfter {
 			continue
 		}
-		if !found || b.last.Before(victimLast) {
-			victim = k
-			victimLast = b.last
-			found = true
+		est := b.tokens + now.Sub(b.last).Seconds()*l.ratePerSec
+		if est < l.burst {
+			continue
 		}
-	}
-	if !found {
-		return false
-	}
-	delete(l.buckets, victim)
-	return true
-}
-
-func refillUnlocked(b *tokenBucket, ratePerSec, burst float64, now time.Time) {
-	elapsed := now.Sub(b.last).Seconds()
-	if elapsed <= 0 {
+		delete(l.buckets, k)
 		return
 	}
-	b.tokens += elapsed * ratePerSec
-	if b.tokens > burst {
-		b.tokens = burst
+	for k := range l.buckets {
+		delete(l.buckets, k)
+		return
 	}
-	// Do not advance last here - idle detection uses last activity time.
 }
 
 func writeTooManyRequests(w http.ResponseWriter, retry time.Duration) {
-	if retry < time.Second {
-		retry = time.Second
+	sec := int(math.Ceil(retry.Seconds()))
+	if sec < 1 {
+		sec = 1
 	}
-	w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+	w.Header().Set("Retry-After", strconv.Itoa(sec))
 	http.Error(w, "too many requests", http.StatusTooManyRequests)
 }
 
